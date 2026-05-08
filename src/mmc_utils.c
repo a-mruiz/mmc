@@ -1742,6 +1742,43 @@ int mcx_loadjson(cJSON* root, mcconfig* cfg) {
                     }
                 }
             }
+
+
+            subitem = FIND_JSON_OBJ("Param1", "Optode.Detector.Param1", src);
+
+            if (subitem && cJSON_GetArraySize(subitem) == 4) {
+                cfg->detparam1.x = subitem->child->valuedouble;
+
+                if (subitem->child->next) {
+                    cfg->detparam1.y = subitem->child->next->valuedouble;
+
+                    if (subitem->child->next->next) {
+                        cfg->detparam1.z = subitem->child->next->next->valuedouble;
+
+                        if (subitem->child->next->next->next) {
+                            cfg->detparam1.w = subitem->child->next->next->next->valuedouble;
+                        }
+                    }
+                }
+            }
+
+            subitem = FIND_JSON_OBJ("Param2", "Optode.Detector.Param2", src);
+
+            if (subitem && cJSON_GetArraySize(subitem) == 4) {
+                cfg->detparam2.x = subitem->child->valuedouble;
+
+                if (subitem->child->next) {
+                    cfg->detparam2.y = subitem->child->next->valuedouble;
+
+                    if (subitem->child->next->next) {
+                        cfg->detparam2.z = subitem->child->next->next->valuedouble;
+
+                        if (subitem->child->next->next->next) {
+                            cfg->detparam2.w = subitem->child->next->next->next->valuedouble;
+                        }
+                    }
+                }
+            }
         }
     }
 
