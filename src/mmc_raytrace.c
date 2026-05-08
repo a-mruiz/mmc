@@ -2537,7 +2537,7 @@ void launchphoton(mcconfig* cfg, ray* r, tetmesh* mesh, RandType* ran, RandType*
             t = 1.f - 2.f * rand_uniform01(ran);
             s = 1.f - 2.f * rand_uniform01(ran);
             p = sqrtf(1.f - r->vec.x * r->vec.x - r->vec.y * r->vec.y) * (rand_uniform01(ran) > 0.5f ? 1.f : -1.f);
-            float3 vv;
+            float4 vv;
             vv.x = r->vec.y * p - r->vec.z * s;
             vv.y = r->vec.z * t - r->vec.x * p;
             vv.z = r->vec.x * s - r->vec.y * t;
