@@ -1052,8 +1052,8 @@ are more than what your have specified (%d), please use the --maxjumpdebug optio
             cfg->his.savedphoton = cfg->detectedcount;
             cfg->his.detected = cfg->detectedcount;
             cfg->his.colcount = (2 + (cfg->ismomentum > 0)) * cfg->his.maxmedia + (cfg->issaveexit > 0) * 6 + 2; /*column count=maxmedia+3*/
-            mcx_savedetphoton(cfg->exportdetected, (void*)(cfg->exportseed), cfg->detectedcount,
-                              (sizeof(uint64_t) * RAND_BUF_LEN), cfg);
+            cfg->his.seedbyte = (cfg->exportseed) ? (sizeof(RandType) * RAND_BUF_LEN) : 0;
+            mcx_savedetphoton(cfg->exportdetected, (void*)(cfg->exportseed), cfg->detectedcount, 0, cfg);
             MMC_FPRINTF(cfg->flog, "saving detected photon data complete : %d ms\n\n", GetTimeMillis() - tic);
         }
 

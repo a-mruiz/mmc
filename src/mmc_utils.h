@@ -118,9 +118,11 @@ enum TRayHitType {htNone, htInOut, htOutIn, htNoHitIn, htNoHitOut};
 enum TROIType {rtNone, rtEdge, rtNode, rtFace};
 
 enum TBJData {JDB_mixed, JDB_nulltype, JDB_noop, JDB_true, JDB_false,
-              JDB_char, JDB_string, JDB_hp, JDB_int8, JDB_uint8, JDB_int16, JDB_int32,
-              JDB_int64, JDB_single, JDB_double, JDB_array, JDB_object, JDB_numtypes,
-              JDB_uint16 = 10, JDB_uint32, JDB_uint64
+              JDB_char, JDB_string, JDB_hp,
+              JDB_int8, JDB_uint8, JDB_int16, JDB_uint16,
+              JDB_int32, JDB_uint32, JDB_int64, JDB_uint64,
+              JDB_half, JDB_single, JDB_double,
+              JDB_array, JDB_object, JDB_numtypes
              };
 
 /***************************************************************************//**
@@ -368,6 +370,7 @@ void mcx_savebnii(void* vol, int ndim, uint* dims, float* voxelsize, char* name,
 void mcx_savefloatjnii(float* vol, int ndim, uint* dims, float* voxelsize, char* name, mcconfig* cfg);
 void mcx_savefloatbnii(float* vol, int ndim, uint* dims, float* voxelsize, char* name, mcconfig* cfg);
 void mcx_savejdet(float* ppath, void* seeds, uint count, int doappend, mcconfig* cfg);
+void mcx_savejdb(float* ppath, void* seeds, uint count, int doappend, mcconfig* cfg);
 void mcx_fflush(FILE* out);
 void mmc_validate_config(mcconfig* cfg, float* detps, int dimdetps[2], int seedbyte);
 
