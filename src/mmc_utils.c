@@ -107,7 +107,7 @@ const char shortopt[] = {'h', 'E', 'f', 'n', 'A', 't', 'T', 's', 'a', 'g', 'b', 
                          'd', 'r', 'S', 'e', 'U', 'R', 'l', 'L', 'I', '-', 'u', 'C', 'M',
                          'i', 'V', 'O', '-', 'F', 'q', 'x', 'P', 'k', 'v', 'm', '-', '-',
                          'J', 'o', 'H', '-', 'W', 'X', '-', 'c', 'Q', '-', 'Z', 'N', 'j',
-                         '\0'
+                         '-', '\0'
                         };
 
 /**
@@ -126,7 +126,7 @@ const char* fullopt[] = {"--help", "--seed", "--input", "--photon", "--autopilot
                          "--replaydet", "--voidtime", "--version", "--mc", "--atomic",
                          "--debugphoton", "--compileropt", "--optlevel", "--maxdetphoton",
                          "--buffer", "--workload", "--saveref", "--gridsize", "--compute",
-                         "--bench", "--dumpjson", "--zip", "--net", "--json", ""
+                         "--bench", "--dumpjson", "--zip", "--net", "--json", "--maxjumpdebug", ""
                         };
 
 extern char pathsep;
