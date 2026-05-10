@@ -1812,16 +1812,6 @@ void mesh_savedetphoton(float* ppath, void* seeds, int count, int seedbyte, mcco
         cfg->his.seedbyte = seedbyte;
     }
 
-    /*
-        if (count > 0 && cfg->exportdetected == NULL) {
-            cfg->detectedcount = count;
-            cfg->exportdetected = (float*)malloc(cfg->his.colcount * cfg->detectedcount * sizeof(float));
-        }
-
-        if (cfg->exportdetected != ppath) {
-            memcpy(cfg->exportdetected, ppath, count * cfg->his.colcount * sizeof(float));
-        }
-    */
     fwrite(&(cfg->his), sizeof(history), 1, fp);
     fwrite(ppath, sizeof(float), count * cfg->his.colcount, fp);
 

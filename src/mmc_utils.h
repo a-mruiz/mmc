@@ -359,6 +359,7 @@ void mcx_cleargpuinfo(GPUInfo** gpuinfo);
 void mcx_convertcol2row(unsigned int** vol, uint3* dim);
 void mcx_convertcol2row4d(unsigned int** vol, uint4* dim);
 void mcx_savejdata(char* filename, mcconfig* cfg);
+void mcx_savedetphoton(float* ppath, void* seeds, int count, int seedbyte, mcconfig* cfg);
 int  mcx_jdataencode(void* vol,  int ndim, uint* dims, char* type, int byte, int zipid, void* obj, int isubj, int iscol, mcconfig* cfg);
 int  mcx_jdatadecode(void** vol, int* ndim, uint* dims, int maxdim, char** type, cJSON* obj, mcconfig* cfg);
 void mcx_convertrow2col(float* vol, uint3* dim);

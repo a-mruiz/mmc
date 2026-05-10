@@ -1053,20 +1053,24 @@ is more than what your have specified (%d), please use the -H option to specify 
     }
 
     if (cfg->issavedet && cfg->parentid == mpStandalone && cfg->exportdetected) {
+        MMC_FPRINTF(cfg->flog, "saving detected photon data to file ...\t");
         cfg->his.totalphoton = cfg->nphoton;
         cfg->his.unitinmm = cfg->unitinmm;
         cfg->his.savedphoton = cfg->detectedcount;
         cfg->his.detected = cfg->detectedcount;
         cfg->his.colcount = (2 + (cfg->ismomentum > 0)) * cfg->his.maxmedia + (cfg->issaveexit > 0) * 6 + 2; /*column count=maxmedia+3*/
-        mesh_savedetphoton(cfg->exportdetected, (void*)(cfg->exportseed), cfg->detectedcount, (sizeof(RandType)*RAND_BUF_LEN), cfg);
+        mcx_savedetphoton(cfg->exportdetected, (void*)(cfg->exportseed), cfg->detectedcount, (sizeof(RandType)*RAND_BUF_LEN), cfg);
+        MMC_FPRINTF(cfg->flog, "saving detected photon data complete : %d ms\n\n", GetTimeMillis() - tic);
     }
 
     if ((cfg->debuglevel & dlTraj) && cfg->parentid == mpStandalone && cfg->exportdebugdata) {
+        MMC_FPRINTF(cfg->flog, "saving trajectory data to file ...\t");
         cfg->his.colcount = MCX_DEBUG_REC_LEN;
         cfg->his.savedphoton = cfg->debugdatalen;
         cfg->his.totalphoton = cfg->nphoton;
         cfg->his.detected = 0;
-        mesh_savedetphoton(cfg->exportdebugdata, NULL, cfg->debugdatalen, 0, cfg);
+        mcx_savedetphoton(cfg->exportdebugdata, NULL, cfg->debugdatalen, 0, cfg);
+        MMC_FPRINTF(cfg->flog, "saving trajectory data complete : %d ms\n\n", GetTimeMillis() - tic);
     }
 
     if (cfg->issaveref && cfg->parentid == mpStandalone) {
