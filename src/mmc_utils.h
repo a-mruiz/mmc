@@ -304,6 +304,9 @@ typedef struct MMC_config {
     float* exportjacob;           /**<float buffer for adjoint Jacobian output (separate from RF imaginary fluence)*/
     ExtraSrc* srcdata;            /**<multi-source list for adjoint mode; length = extrasrclen*/
     int extrasrclen;              /**<number of entries in srcdata (>0 for adjoint/multi-source mode)*/
+    int srcid;                    /**<multi-source selector: 0=merge all (default), -1=run each slot separately,
+                                       -2=append detectors as adjoint sources without forcing adjoint output,
+                                       N>0=run only the N-th source*/
     double* energytot;             /**<total energy launched for each source, a buffer of length srcnum */
     double* energyesc;             /**<total energy escaped for each source, a buffer of length srcnum */
     unsigned int detectedcount;    /**<total number of detected photons*/

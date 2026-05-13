@@ -104,7 +104,7 @@ const char shortopt[] = {'h', 'E', 'f', 'n', 'A', 't', 'T', 's', 'a', 'g', 'b', 
                          'd', 'r', 'S', 'e', 'U', 'R', 'l', 'L', 'I', '-', 'u', 'C', 'M',
                          'i', 'V', 'O', '-', 'F', 'q', 'x', 'P', 'k', 'v', 'm', '-', '-',
                          'J', 'o', 'H', '-', 'W', 'X', '-', 'c', 'Q', '-', 'Z', 'N', 'j',
-                         '-', '\0'
+                         '-', '-', '\0'
                         };
 
 /**
@@ -123,7 +123,8 @@ const char* fullopt[] = {"--help", "--seed", "--input", "--photon", "--autopilot
                          "--replaydet", "--voidtime", "--version", "--mc", "--atomic",
                          "--debugphoton", "--compileropt", "--optlevel", "--maxdetphoton",
                          "--buffer", "--workload", "--saveref", "--gridsize", "--compute",
-                         "--bench", "--dumpjson", "--zip", "--net", "--json", "--maxjumpdebug", ""
+                         "--bench", "--dumpjson", "--zip", "--net", "--json", "--maxjumpdebug",
+                         "--srcid", ""
                         };
 
 extern char pathsep;
@@ -269,6 +270,7 @@ void mcx_initcfg(mcconfig* cfg) {
     cfg->omega = 0.f;
     cfg->extrasrclen = 0;
     cfg->srcdata = NULL;
+    cfg->srcid = 0;
     cfg->detdir = NULL;
     cfg->exportadjoint = NULL;
     cfg->exportjacob = NULL;
@@ -1787,6 +1789,10 @@ int mcx_loadjson(cJSON* root, mcconfig* cfg) {
 
             if (subitem) {
                 cfg->srctype = mcx_keylookup(subitem->valuestring, srctypeid);
+            }
+
+            if (FIND_JSON_OBJ("ID", "Optode.Source.ID", src)) {
+                cfg->srcid = FIND_JSON_KEY("ID", "Optode.Source.ID", src, cfg->srcid, valueint);
             }
 
             subitem = FIND_JSON_OBJ("Param1", "Optode.Source.Param1", src);
@@ -3428,6 +3434,10 @@ void mmc_validate_config(mcconfig* cfg, float* detps, int dimdetps[2], int seedb
         MMC_ERROR(999, "multiple source simulation is currently not supported under replay mode");
     }
 
+    if (cfg->extrasrclen > 0 && cfg->srcid > cfg->extrasrclen) {
+        MMC_ERROR(-4, "srcid exceeds total defined source count");
+    }
+
     cfg->his.unitinmm = cfg->unitinmm;
 
     if (cfg->steps.x != cfg->steps.y || cfg->steps.y != cfg->steps.z) {
@@ -3479,6 +3489,56 @@ void mcx_prep(mcconfig* cfg) {
     if (cfg->issaveexit) {
         cfg->savedetflag = SET_SAVE_PEXIT(cfg->savedetflag);
         cfg->savedetflag = SET_SAVE_VEXIT(cfg->savedetflag);
+    }
+
+    /**
+     * Append detectors as reversed sources for adjoint / srcid=-2 mode.
+     * In the mex containers (mmclab/pmmc), this is handled in the host wrapper
+     * before mmc_prep is called, in which case cfg->srcdata is already populated;
+     * we detect that and skip to avoid double-appending.
+     *
+     * Convention (matches mmclab.cpp / pmmc.cpp):
+     *   srcdata[0..Ns-1]        : forward sources (copy of cfg->srcpos/srcdir)
+     *   srcdata[Ns..Ns+Nd-1]    : detector-as-adjoint sources
+     */
+    if ((MCX_IS_ADJOINT_TYPE(cfg->outputtype) || cfg->srcid == -2) && cfg->seed != SEED_FROM_FILE
+            && cfg->detnum > 0 && cfg->detdir != NULL && cfg->srcdata == NULL) {
+        int Ns = (cfg->srcnum > 0) ? cfg->srcnum : 1;
+        int Nd = cfg->detnum;
+        cfg->extrasrclen = Ns + Nd;
+        cfg->srcdata = (ExtraSrc*)calloc(cfg->extrasrclen, sizeof(ExtraSrc));
+
+        for (int is = 0; is < Ns; is++) {
+            cfg->srcdata[is].srcpos.x  = cfg->srcpos.x;
+            cfg->srcdata[is].srcpos.y  = cfg->srcpos.y;
+            cfg->srcdata[is].srcpos.z  = cfg->srcpos.z;
+            cfg->srcdata[is].srcpos.w  = 1.f / Ns;
+            cfg->srcdata[is].srcdir.x  = cfg->srcdir.x;
+            cfg->srcdata[is].srcdir.y  = cfg->srcdir.y;
+            cfg->srcdata[is].srcdir.z  = cfg->srcdir.z;
+            cfg->srcdata[is].srcdir.w  = 0.f;
+            cfg->srcdata[is].srcparam1 = cfg->srcparam1;
+            cfg->srcdata[is].srcparam2 = cfg->srcparam2;
+        }
+
+        for (int id = 0; id < Nd; id++) {
+            cfg->srcdata[Ns + id].srcpos.x    = cfg->detpos[id].x;
+            cfg->srcdata[Ns + id].srcpos.y    = cfg->detpos[id].y;
+            cfg->srcdata[Ns + id].srcpos.z    = cfg->detpos[id].z;
+            cfg->srcdata[Ns + id].srcpos.w    = 1.f / Nd;
+            cfg->srcdata[Ns + id].srcdir.x    = cfg->detdir[id].x;
+            cfg->srcdata[Ns + id].srcdir.y    = cfg->detdir[id].y;
+            cfg->srcdata[Ns + id].srcdir.z    = cfg->detdir[id].z;
+            cfg->srcdata[Ns + id].srcdir.w    = cfg->detdir[id].w;
+            cfg->srcdata[Ns + id].srcparam1.x = cfg->detpos[id].w; /* detector radius (disk source) */
+            cfg->srcdata[Ns + id].srcparam1.y = 0.f;
+            cfg->srcdata[Ns + id].srcparam1.z = 0.f;
+            cfg->srcdata[Ns + id].srcparam1.w = 0.f;
+        }
+
+        if (MCX_IS_ADJOINT_TYPE(cfg->outputtype)) {
+            cfg->srcid = -1;
+        }
     }
 
 }
@@ -3897,6 +3957,8 @@ void mcx_parsecmd(int argc, char* argv[], mcconfig* cfg) {
                         i = mcx_readarg(argc, argv, i, &(cfg->steps.x), "float");
                         cfg->steps.y = cfg->steps.x;
                         cfg->steps.z = cfg->steps.x;
+                    } else if (strcmp(argv[i] + 2, "srcid") == 0) {
+                        i = mcx_readarg(argc, argv, i, &(cfg->srcid), "int");
                     } else {
                         MMC_FPRINTF(cfg->flog, "unknown verbose option: --%s\n", argv[i] + 2);
                     }
@@ -4206,6 +4268,11 @@ where possible parameters include (the first item in [] is the default value)\n\
 == Additional options ==\n"S_RESET"\
  --momentum     [0|1]          1 to save photon momentum transfer,0 not to save\n\
  --gridsize     [1|float]      if -M G is used, this sets the grid size in mm\n\
+ --srcid  [0|-1,0,1,2,..]      -1 simulate each source/detector slot separately\n\
+                               0 all sources together (default)\n\
+                               -2 append detectors as adjoint sources (forward\n\
+                               fluence in all Ns+Nd slots, no Jacobian)\n\
+                               N>0 run only the N-th source\n\
  --maxjumpdebug [10000000|int] when trajectory is requested (i.e. -D S),\n\
                                use this parameter to set the maximum positions\n\
                                stored (default: 1e7)\n\

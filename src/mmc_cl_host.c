@@ -138,7 +138,7 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
         cfg->issaveseed, cfg->seed, cfg->maxjumpdebug,
         cfg->omega,
         (float)(3.335640951981520e-12),   /* oneoverc0 */
-        (cfg->extrasrclen > 0) ? -1 : 0,  /* srcid */
+        (cfg->extrasrclen > 0 && cfg->srcid >= 0) ? -1 : cfg->srcid,  /* srcid < 0 triggers multi-source mode */
         cfg->extrasrclen,
         (int)(mesh->prop + 1 + cfg->isextdet)  /* srcpropoffset */
     };
@@ -826,15 +826,45 @@ is more than what your have specified (%d), please use the -H option to specify 
             }
         } else {
             int srcid;
+            /* basisorder=1 mesh mode: redistribute per-element fluence onto nodes.
+             * Kernel layout per slot (adjoint, srcnum=1, nsrcslots>1):
+             *   field[eid + gate*ne*nsrcslots + slot*ne*maxgate]
+             * Pattern source layout (srcnum>1, nsrcslots=1):
+             *   field[(gate*ne + eid)*srcnum + pidx]
+             * Output (exportfield) per-slot stride = nn*maxgate to match grid convention.
+             */
+            cl_uint nslots = (cfg->extrasrclen > 0) ? (cl_uint)cfg->extrasrclen : 1u;
 
-            for (i = 0; i < cfg->maxgate; i++) {
-                for (j = 0; j < mesh->ne; j++) {
-                    for (srcid = 0; srcid < cfg->srcnum; srcid++) {
-                        float ww = field[(i * mesh->ne + j) * cfg->srcnum + srcid] * 0.25f;
-                        int k;
+            if (nslots > 1u && cfg->srcnum == 1) {
+                for (cl_uint slot = 0; slot < nslots; slot++) {
+                    size_t f_slot_off = (size_t)slot * (size_t)mesh->ne * (size_t)cfg->maxgate;
+                    size_t e_slot_off = (size_t)slot * (size_t)mesh->nn * (size_t)cfg->maxgate;
 
-                        for (k = 0; k < mesh->elemlen; k++) {
-                            cfg->exportfield[(i * mesh->nn + mesh->elem[j * mesh->elemlen + k] - 1) * cfg->srcnum + srcid] += ww;
+                    for (i = 0; i < cfg->maxgate; i++) {
+                        size_t f_gate_off = (size_t)i * (size_t)mesh->ne * (size_t)nslots;
+                        size_t e_gate_off = (size_t)i * (size_t)mesh->nn;
+
+                        for (j = 0; j < mesh->ne; j++) {
+                            float ww = field[f_slot_off + f_gate_off + j] * 0.25f;
+                            int k;
+
+                            for (k = 0; k < mesh->elemlen; k++) {
+                                cfg->exportfield[e_slot_off + e_gate_off
+                                                            + mesh->elem[j * mesh->elemlen + k] - 1] += ww;
+                            }
+                        }
+                    }
+                }
+            } else {
+                for (i = 0; i < cfg->maxgate; i++) {
+                    for (j = 0; j < mesh->ne; j++) {
+                        for (srcid = 0; srcid < cfg->srcnum; srcid++) {
+                            float ww = field[(i * mesh->ne + j) * cfg->srcnum + srcid] * 0.25f;
+                            int k;
+
+                            for (k = 0; k < mesh->elemlen; k++) {
+                                cfg->exportfield[(i * mesh->nn + mesh->elem[j * mesh->elemlen + k] - 1) * cfg->srcnum + srcid] += ww;
+                            }
                         }
                     }
                 }
@@ -861,11 +891,15 @@ is more than what your have specified (%d), please use the -H option to specify 
 
         cfg->his.normalizer = sum_normalizer / cfg->srcnum; // average normalizer value for all simulated sources
 
-        /* For adjoint Jacobian mode, mesh_normalize only covers slots 0..srcnum-1 in exportfield.
-         * Apply the same average normalizor to the remaining slots srcnum..extrasrclen-1. */
-        if (cfg->extrasrclen > cfg->srcnum && cfg->method == rtBLBadouelGrid && cfg->exportfield) {
+        /* For adjoint / multi-source mode, mesh_normalize only covers slots 0..srcnum-1
+         * in exportfield. Apply the same average normalizor to slots srcnum..extrasrclen-1.
+         * Works for both grid (datalen=crop0.z) and mesh (datalen=ne or nn) layouts. */
+        if (cfg->extrasrclen > cfg->srcnum && cfg->exportfield) {
             double avg_normalizor = sum_normalizer / cfg->srcnum;
-            size_t slot_stride   = (size_t)cfg->crop0.z * cfg->maxgate;
+            size_t datalen = (cfg->method == rtBLBadouelGrid)
+                             ? (size_t)cfg->crop0.z
+                             : (size_t)((cfg->basisorder) ? mesh->nn : mesh->ne);
+            size_t slot_stride = datalen * (size_t)cfg->maxgate;
 
             for (int slot = cfg->srcnum; slot < cfg->extrasrclen; slot++) {
                 for (size_t ki = 0; ki < slot_stride; ki++) {
