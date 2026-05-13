@@ -152,6 +152,8 @@ void parse_config(const py::dict& user_cfg, mcconfig& mcx_config, tetmesh& mesh)
     GET_SCALAR_FIELD(user_cfg, mcx_config, e0, py::int_);
     GET_SCALAR_FIELD(user_cfg, mcx_config, srcid, py::int_);
     GET_SCALAR_FIELD(user_cfg, mcx_config, adjointmode, py::int_);
+    GET_SCALAR_FIELD(user_cfg, mcx_config, isnodalmua, py::int_);
+    GET_SCALAR_FIELD(user_cfg, mcx_config, isnodalmusp, py::int_);
     GET_VEC3_FIELD(user_cfg, mcx_config, srcpos, float);
     GET_VEC34_FIELD(user_cfg, mcx_config, srcdir, float);
     GET_VEC3_FIELD(user_cfg, mcx_config, steps, float);
@@ -548,6 +550,48 @@ void parse_config(const py::dict& user_cfg, mcconfig& mcx_config, tetmesh& mesh)
             }
 
         std::cout << "detdir: [" << nd << ",4]" << std::endl;
+    }
+
+    /* per-node optical properties: cfg.nodemua / cfg.nodemusp are length-nn float arrays.
+     * Either array's presence auto-sets the corresponding isnodal* flag. */
+    if (user_cfg.contains("nodemua")) {
+        auto arr = py::array_t < float, py::array::f_style | py::array::forcecast >::ensure(user_cfg["nodemua"]);
+
+        if (!arr) {
+            throw py::value_error("Invalid nodemua field value");
+        }
+
+        auto buffer_info = arr.request();
+        size_t nn = (size_t)buffer_info.size;
+
+        if (mcx_config.nodemua) {
+            free(mcx_config.nodemua);
+        }
+
+        mcx_config.nodemua = (float*) malloc(nn * sizeof(float));
+        memcpy(mcx_config.nodemua, buffer_info.ptr, nn * sizeof(float));
+        mcx_config.isnodalmua = 1;
+        std::cout << "nodemua: [" << nn << "]" << std::endl;
+    }
+
+    if (user_cfg.contains("nodemusp")) {
+        auto arr = py::array_t < float, py::array::f_style | py::array::forcecast >::ensure(user_cfg["nodemusp"]);
+
+        if (!arr) {
+            throw py::value_error("Invalid nodemusp field value");
+        }
+
+        auto buffer_info = arr.request();
+        size_t nn = (size_t)buffer_info.size;
+
+        if (mcx_config.nodemusp) {
+            free(mcx_config.nodemusp);
+        }
+
+        mcx_config.nodemusp = (float*) malloc(nn * sizeof(float));
+        memcpy(mcx_config.nodemusp, buffer_info.ptr, nn * sizeof(float));
+        mcx_config.isnodalmusp = 1;
+        std::cout << "nodemusp: [" << nn << "]" << std::endl;
     }
 
 

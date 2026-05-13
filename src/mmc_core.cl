@@ -36,6 +36,15 @@
 #define __global
 #define __kernel __global__
 
+/* CUDA: per-node mua/musp dispatch via template parameters so the host can
+ * select between gmed[] (constant memory) and the per-node global-memory
+ * arrays at runtime without rebuilding the kernel. The template-param names
+ * NODAL_USE_MUA / NODAL_USE_MUSP match the OpenCL #defines (set in the #else
+ * branch from MCX_NODAL_MUA / MCX_NODAL_MUSP) so the kernel body can be
+ * written once. */
+#define MMC_TEMPLATE template <const int NODAL_USE_MUA, const int NODAL_USE_MUSP>
+#define MMC_TARGS    <NODAL_USE_MUA, NODAL_USE_MUSP>
+
 inline __device__ float3 cross(float3 a, float3 b) {
     return make_float3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
 }
@@ -206,6 +215,31 @@ typedef struct MMC_FLOAT3 {
 #ifndef NULL
     #define NULL 0
 #endif
+
+/* OpenCL: per-node mua/musp dispatch via JIT macros (-DMCX_NODAL_MUA /
+ * -DMCX_NODAL_MUSP appended in mmc_cl_host.c). The kernel always declares
+ * gnodemua/gnodemusp args but only dereferences them when the macro is set,
+ * so non-recon callers can bind NULL.
+ *
+ * CUDA: dispatch lives in template parameters (see the #ifdef __NVCC__
+ * block at the head of this file); the names NODAL_USE_MUA / NODAL_USE_MUSP
+ * are reused inside templated functions so the same body compiles for both
+ * backends. */
+#ifdef MCX_NODAL_MUA
+    #define NODAL_USE_MUA   1
+#else
+    #define NODAL_USE_MUA   0
+#endif
+#ifdef MCX_NODAL_MUSP
+    #define NODAL_USE_MUSP  1
+#else
+    #define NODAL_USE_MUSP  0
+#endif
+
+/* OpenCL has no function templates; the dispatch lives entirely in the
+ * #defines above, so the template prefix and call-site arglist are empty. */
+#define MMC_TEMPLATE
+#define MMC_TARGS
 
 
 #ifdef MCX_USE_NATIVE
@@ -617,8 +651,11 @@ __device__ void savedebugdata(ray* r, uint id, __global MCXReporter* reporter, _
  * \param[out] visit: statistics counters of this thread
  */
 
+MMC_TEMPLATE
 __device__ float branchless_badouel_raytet(ray* r, __constant MCXParam* gcfg, __local float* ppath, __global int* elem, __global float* weight,
-        int type, __global int* facenb, __global float4* normal, __constant Medium* gmed, __global float* replayweight, __global float* replaytime) {
+        int type, __global int* facenb, __global float4* normal, __constant Medium* gmed,
+        __global float* gnodemua, __global float* gnodemusp,
+        __global float* replayweight, __global float* replaytime) {
 
     float Lmin;
     float ww, totalloss = 0.f;
@@ -670,6 +707,24 @@ __device__ float branchless_badouel_raytet(ray* r, __constant MCXParam* gcfg, __
         Medium prop;
 
         prop = gmed[type];
+
+        /* Per-node mua/musp override (set by redbird-style DOT reconstruction).
+         * Uses the element-centroid average of the four nodal values, which is
+         * what the linear-FEM mass-matrix integration of a per-node-linear
+         * property reduces to. NODAL_USE_MUA/NODAL_USE_MUSP are compile-time
+         * constants (template params in CUDA, #define from MCX_NODAL_MUA/MUSP
+         * in OpenCL) so the unused branch is dead-code-eliminated. */
+        if (NODAL_USE_MUA) {
+            __global int* eelocal = elem + (r->eid - 1) * GPU_PARAM(gcfg, elemlen);
+            prop.mua = 0.25f * (gnodemua[eelocal[0] - 1] + gnodemua[eelocal[1] - 1]
+                                + gnodemua[eelocal[2] - 1] + gnodemua[eelocal[3] - 1]);
+
+            if (NODAL_USE_MUSP) {
+                prop.mus = 0.25f * (gnodemusp[eelocal[0] - 1] + gnodemusp[eelocal[1] - 1]
+                                    + gnodemusp[eelocal[2] - 1] + gnodemusp[eelocal[3] - 1]);
+            }
+        }
+
         currweight.f = r->weight;
 
         r->Lmove = (prop.mus <= EPS) ? R_MIN_MUS : r->slen / prop.mus;
@@ -1635,8 +1690,10 @@ __device__ void launchnewphoton(__constant MCXParam* gcfg, ray* r, __global FLOA
  * \param[out] visit: statistics counters of this thread
  */
 
+MMC_TEMPLATE
 __device__ void onephoton(unsigned int id, __local float* ppath, __constant MCXParam* gcfg, __global FLOAT3* node, __global int* elem, __global float* weight, __global float* dref,
                           __global int* type, __global int* facenb,  __global int* srcelem, __global float4* normal, __constant Medium* gmed,
+                          __global float* gnodemua, __global float* gnodemusp,
                           __global float* n_det, __global uint* detectedphoton, __local float* energytot, __local float* energyesc, __private RandType* ran, int* raytet, __global float* srcpattern,
                           __global float* replayweight, __global float* replaytime, __global RandType* photonseed, __global MCXReporter* reporter, __global float* gdebugdata) {
 
@@ -1706,7 +1763,7 @@ __device__ void onephoton(unsigned int id, __local float* ppath, __constant MCXP
     /*http://stackoverflow.com/questions/2148149/how-to-sum-a-large-number-of-float-number*/
 
     while (1) { /*propagate a photon until exit*/
-        r.slen = branchless_badouel_raytet(&r, gcfg, ppath, elem, weight, type[r.eid - 1], facenb, normal, gmed, replayweight, replaytime);
+        r.slen = branchless_badouel_raytet MMC_TARGS (&r, gcfg, ppath, elem, weight, type[r.eid - 1], facenb, normal, gmed, gnodemua, gnodemusp, replayweight, replaytime);
         (*raytet)++;
 
         if (r.pout.x == MMC_UNDEFINED) {
@@ -1779,7 +1836,7 @@ __device__ void onephoton(unsigned int id, __local float* ppath, __constant MCXP
                 GPUDEBUG(("P %f %f %f %d %u %e\n", r.pout.x, r.pout.y, r.pout.z, r.eid, id, r.slen));
             }
 
-            r.slen = branchless_badouel_raytet(&r, gcfg, ppath, elem, weight, type[r.eid - 1], facenb, normal, gmed, replayweight, replaytime);
+            r.slen = branchless_badouel_raytet MMC_TARGS (&r, gcfg, ppath, elem, weight, type[r.eid - 1], facenb, normal, gmed, gnodemua, gnodemusp, replayweight, replaytime);
             (*raytet)++;
 #if defined(MCX_SAVE_DETECTORS) || defined(__NVCC__)
 
@@ -1797,7 +1854,7 @@ __device__ void onephoton(unsigned int id, __local float* ppath, __constant MCXP
 
             while (r.pout.x == MMC_UNDEFINED && fixcount++ < MAX_TRIAL) {
                 fixphoton(&r.p0, node, (__global int*)(elem + (r.eid - 1)*GPU_PARAM(gcfg, elemlen)));
-                r.slen = branchless_badouel_raytet(&r, gcfg, ppath, elem, weight, type[r.eid - 1], facenb, normal, gmed, replayweight, replaytime);
+                r.slen = branchless_badouel_raytet MMC_TARGS (&r, gcfg, ppath, elem, weight, type[r.eid - 1], facenb, normal, gmed, gnodemua, gnodemusp, replayweight, replaytime);
                 (*raytet)++;
 #if defined(MCX_SAVE_DETECTORS) || defined(__NVCC__)
 
@@ -1935,11 +1992,13 @@ __device__ void onephoton(unsigned int id, __local float* ppath, __constant MCXP
     }
 }
 
+MMC_TEMPLATE
 __kernel void mmc_main_loop(const int nphoton, const int ophoton,
 #ifndef __NVCC__
     __constant__ MCXParam* gcfg, __local float* sharedmem, __constant__ Medium* gmed,
 #endif
                             __global FLOAT3* node, __global int* elem,  __global float* weight, __global float* dref, __global int* type, __global int* facenb,  __global int* srcelem, __global float4* normal,
+                            __global float* gnodemua, __global float* gnodemusp,
                             __global float* n_det, __global uint* detectedphoton,
                             __global uint* n_seed, __global int* progress, __global float* energy, __global MCXReporter* reporter, __global float* srcpattern,
                             __global float* replayweight, __global float* replaytime, __global RandType* replayseed, __global RandType* photonseed, __global float* gdebugdata) {
@@ -1966,11 +2025,13 @@ __kernel void mmc_main_loop(const int nphoton, const int ophoton,
                 t[j] = replayseed[(idx * nphoton + MIN(idx, ophoton) + i) * RAND_BUF_LEN + j];
             }
 
-        onephoton(idx * nphoton + MIN(idx, ophoton) + i, sharedmem + get_local_size(0) * (GPU_PARAM(gcfg, srcnum) << 1) +
-                  get_local_id(0) * (GPU_PARAM(gcfg, reclen) + (GPU_PARAM(gcfg, srcnum) > 1) * GPU_PARAM(gcfg, srcnum)), gcfg, node, elem,
-                  weight, dref, type, facenb, srcelem, normal, gmed, n_det, detectedphoton, sharedmem + get_local_id(0) * GPU_PARAM(gcfg, srcnum),
-                  sharedmem + (get_local_size(0) + get_local_id(0)) * GPU_PARAM(gcfg, srcnum), t, &raytet,
-                  srcpattern, replayweight, replaytime, photonseed, reporter, gdebugdata);
+        onephoton MMC_TARGS (idx * nphoton + MIN(idx, ophoton) + i, sharedmem + get_local_size(0) * (GPU_PARAM(gcfg, srcnum) << 1) +
+                             get_local_id(0) * (GPU_PARAM(gcfg, reclen) + (GPU_PARAM(gcfg, srcnum) > 1) * GPU_PARAM(gcfg, srcnum)), gcfg, node, elem,
+                             weight, dref, type, facenb, srcelem, normal, gmed,
+                             gnodemua, gnodemusp,
+                             n_det, detectedphoton, sharedmem + get_local_id(0) * GPU_PARAM(gcfg, srcnum),
+                             sharedmem + (get_local_size(0) + get_local_id(0)) * GPU_PARAM(gcfg, srcnum), t, &raytet,
+                             srcpattern, replayweight, replaytime, photonseed, reporter, gdebugdata);
     }
 
     for (int i = 0; i < GPU_PARAM(gcfg, srcnum); i++) {

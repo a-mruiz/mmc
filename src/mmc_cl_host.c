@@ -91,6 +91,7 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
     cl_uint  totalcucore;
     cl_uint  devid = 0;
     cl_mem* gnode = NULL, *gelem = NULL, *gtype = NULL, *gfacenb = NULL, *gsrcelem = NULL, *gnormal = NULL;
+    cl_mem* gnodemua_cl = NULL, *gnodemusp_cl = NULL;   /* per-node mua/musp for DOT recon (NULL otherwise) */
     cl_mem* gproperty = NULL, *gparam = NULL, *gsrcpattern = NULL, *greplayweight = NULL, *greplaytime = NULL, *greplayseed = NULL; /*read-only buffers*/
     cl_mem* gweight, *gdref, *gdetphoton, *gseed, *genergy, *greporter, *gdebugdata;     /*read-write buffers*/
     cl_mem* gprogress = NULL, *gdetected = NULL, *gphotonseed = NULL; /*write-only buffers*/
@@ -191,6 +192,8 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
     gfacenb = (cl_mem*)malloc(workdev * sizeof(cl_mem));
     gsrcelem = (cl_mem*)malloc(workdev * sizeof(cl_mem));
     gnormal = (cl_mem*)malloc(workdev * sizeof(cl_mem));
+    gnodemua_cl  = (cl_mem*)calloc(workdev, sizeof(cl_mem));
+    gnodemusp_cl = (cl_mem*)calloc(workdev, sizeof(cl_mem));
     gproperty = (cl_mem*)malloc(workdev * sizeof(cl_mem));
     gparam = (cl_mem*)malloc(workdev * sizeof(cl_mem));
 
@@ -331,6 +334,18 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
 
         OCL_ASSERT(((gnormal[i] = clCreateBuffer(mcxcontext, RO_MEM, sizeof(float4) * (mesh->ne) * 4, tracer->n, &status), status)));
 
+        if (cfg->isnodalmua && cfg->nodemua) {
+            OCL_ASSERT(((gnodemua_cl[i] = clCreateBuffer(mcxcontext, RO_MEM, sizeof(cl_float) * (mesh->nn), cfg->nodemua, &status), status)));
+        } else {
+            gnodemua_cl[i] = (cl_mem)0;
+        }
+
+        if (cfg->isnodalmusp && cfg->nodemusp) {
+            OCL_ASSERT(((gnodemusp_cl[i] = clCreateBuffer(mcxcontext, RO_MEM, sizeof(cl_float) * (mesh->nn), cfg->nodemusp, &status), status)));
+        } else {
+            gnodemusp_cl[i] = (cl_mem)0;
+        }
+
         OCL_ASSERT(((gproperty[i] = clCreateBuffer(mcxcontext, RO_MEM, MAX_PROP * sizeof(float4), propdet, &status), status)));
         OCL_ASSERT(((gparam[i] = clCreateBuffer(mcxcontext, RO_MEM, sizeof(MCXParam), &param, &status), status)));
 
@@ -462,6 +477,15 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
         snprintf(opt + strlen(opt), MAX_JIT_OPT_LEN - strlen(opt), " -DUSE_NVIDIA_GPU");
     }
 
+    /* enable per-node optical-property reads in the kernel (DOT recon) */
+    if (cfg->isnodalmua) {
+        snprintf(opt + strlen(opt), MAX_JIT_OPT_LEN - strlen(opt), " -DMCX_NODAL_MUA");
+    }
+
+    if (cfg->isnodalmusp) {
+        snprintf(opt + strlen(opt), MAX_JIT_OPT_LEN - strlen(opt), " -DMCX_NODAL_MUSP");
+    }
+
     if (strstr(opt, "USE_MACRO_CONST")) {
         IPARAM_TO_MACRO(opt, param, debuglevel);
         FPARAM_TO_MACRO(opt, param, dstep);
@@ -569,18 +593,20 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
         OCL_ASSERT((clSetKernelArg(mcxkernel[i], 10, sizeof(cl_mem), (void*)(gfacenb + i))));
         OCL_ASSERT((clSetKernelArg(mcxkernel[i], 11, sizeof(cl_mem), (void*)(gsrcelem + i))));
         OCL_ASSERT((clSetKernelArg(mcxkernel[i], 12, sizeof(cl_mem), (void*)(gnormal + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 13, sizeof(cl_mem), (void*)(gdetphoton + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 14, sizeof(cl_mem), (void*)(gdetected + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 15, sizeof(cl_mem), (void*)(gseed + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 16, sizeof(cl_mem), (i == 0) ? ((void*)(gprogress)) : NULL)));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 17, sizeof(cl_mem), (void*)(genergy + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 18, sizeof(cl_mem), (void*)(greporter + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 19, sizeof(cl_mem), (void*)(gsrcpattern + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 20, sizeof(cl_mem), (void*)(greplayweight + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 21, sizeof(cl_mem), (void*)(greplaytime + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 22, sizeof(cl_mem), (void*)(greplayseed + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 23, sizeof(cl_mem), (void*)(gphotonseed + i))));
-        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 24, sizeof(cl_mem), ((cfg->debuglevel & dlTraj) ? (void*)(gdebugdata + i) : NULL) )));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 13, sizeof(cl_mem), (void*)(gnodemua_cl + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 14, sizeof(cl_mem), (void*)(gnodemusp_cl + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 15, sizeof(cl_mem), (void*)(gdetphoton + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 16, sizeof(cl_mem), (void*)(gdetected + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 17, sizeof(cl_mem), (void*)(gseed + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 18, sizeof(cl_mem), (i == 0) ? ((void*)(gprogress)) : NULL)));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 19, sizeof(cl_mem), (void*)(genergy + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 20, sizeof(cl_mem), (void*)(greporter + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 21, sizeof(cl_mem), (void*)(gsrcpattern + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 22, sizeof(cl_mem), (void*)(greplayweight + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 23, sizeof(cl_mem), (void*)(greplaytime + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 24, sizeof(cl_mem), (void*)(greplayseed + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 25, sizeof(cl_mem), (void*)(gphotonseed + i))));
+        OCL_ASSERT((clSetKernelArg(mcxkernel[i], 26, sizeof(cl_mem), ((cfg->debuglevel & dlTraj) ? (void*)(gdebugdata + i) : NULL) )));
     }
 
     MMC_FPRINTF(cfg->flog, "set kernel arguments complete : %d ms %d\n", GetTimeMillis() - tic, param.method);
@@ -1362,6 +1388,15 @@ is more than what your have specified (%d), please use the -H option to specify 
         }
 
         OCL_ASSERT(clReleaseMemObject(gnormal[i]));
+
+        if (gnodemua_cl[i]) {
+            OCL_ASSERT(clReleaseMemObject(gnodemua_cl[i]));
+        }
+
+        if (gnodemusp_cl[i]) {
+            OCL_ASSERT(clReleaseMemObject(gnodemusp_cl[i]));
+        }
+
         OCL_ASSERT(clReleaseMemObject(gproperty[i]));
         OCL_ASSERT(clReleaseMemObject(gparam[i]));
 
@@ -1405,6 +1440,8 @@ is more than what your have specified (%d), please use the -H option to specify 
     free(gfacenb);
     free(gsrcelem);
     free(gnormal);
+    free(gnodemua_cl);
+    free(gnodemusp_cl);
     free(gproperty);
     free(gparam);
 

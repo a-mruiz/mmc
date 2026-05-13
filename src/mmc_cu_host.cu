@@ -217,6 +217,9 @@ void mmc_run_simulation(mcconfig* cfg, tetmesh* mesh, raytracer* tracer, GPUInfo
     int4* gelem, *gfacenb;
     float4* gnormal;
     int* gtype, *gsrcelem;
+    /* per-node optical property arrays for DOT reconstruction (NULL when unused) */
+    float* gnodemua_cu = NULL;
+    float* gnodemusp_cu = NULL;
     uint* gseed, *gdetected;
     volatile int* progress, *gprogress;
     float* gweight, *gdref, *gdetphoton, *genergy, *gsrcpattern, *gdebugdata;
@@ -467,6 +470,19 @@ void mmc_run_simulation(mcconfig* cfg, tetmesh* mesh, raytracer* tracer, GPUInfo
     CUDA_ASSERT(cudaMemcpy(gnormal, tracer->n, sizeof(float4) * (mesh->ne) * 4,
                            cudaMemcpyHostToDevice));
 
+    /* upload per-node mua/musp for DOT reconstruction modes (size mesh->nn) */
+    if (cfg->isnodalmua && cfg->nodemua) {
+        CUDA_ASSERT(cudaMalloc((void**)&gnodemua_cu, sizeof(float) * (mesh->nn)));
+        CUDA_ASSERT(cudaMemcpy(gnodemua_cu, cfg->nodemua, sizeof(float) * (mesh->nn),
+                               cudaMemcpyHostToDevice));
+    }
+
+    if (cfg->isnodalmusp && cfg->nodemusp) {
+        CUDA_ASSERT(cudaMalloc((void**)&gnodemusp_cu, sizeof(float) * (mesh->nn)));
+        CUDA_ASSERT(cudaMemcpy(gnodemusp_cu, cfg->nodemusp, sizeof(float) * (mesh->nn),
+                               cudaMemcpyHostToDevice));
+    }
+
     // gparam
     CUDA_ASSERT(cudaMemcpyToSymbol(gcfg, &param, sizeof(MCXParam), 0, cudaMemcpyHostToDevice));
 
@@ -642,11 +658,35 @@ void mmc_run_simulation(mcconfig* cfg, tetmesh* mesh, raytracer* tracer, GPUInfo
             param.tend = twindow1;
 
 
-            mmc_main_loop <<< mcgrid, mcblock, sharedmemsize>>>(
-                threadphoton, oddphotons, gnode, (int*)gelem, gweight, gdref,
-                gtype, (int*)gfacenb, gsrcelem, gnormal,
-                gdetphoton, gdetected, gseed, (int*)gprogress, genergy, greporter,
-                gsrcpattern, greplayweight, greplaytime, greplayseed, gphotonseed, gdebugdata);
+            /* Three valid template variants for cfg.isnodalmua/isnodalmusp:
+             *   (0,0): default, all properties from gmed[type] (constant mem)
+             *   (1,0): per-node mua via gnodemua_cu (CW DOT recon)
+             *   (1,1): per-node mua + musp via gnodemua_cu + gnodemusp_cu (RF DOT recon)
+             * isnodalmusp=1 without isnodalmua=1 is rejected during prep. */
+            int nodevariant = (cfg->isnodalmua ? 1 : 0) | (cfg->isnodalmusp ? 2 : 0);
+
+            if (nodevariant == 3) {
+                mmc_main_loop<1, 1> <<< mcgrid, mcblock, sharedmemsize>>>(
+                    threadphoton, oddphotons, gnode, (int*)gelem, gweight, gdref,
+                    gtype, (int*)gfacenb, gsrcelem, gnormal,
+                    gnodemua_cu, gnodemusp_cu,
+                    gdetphoton, gdetected, gseed, (int*)gprogress, genergy, greporter,
+                    gsrcpattern, greplayweight, greplaytime, greplayseed, gphotonseed, gdebugdata);
+            } else if (nodevariant == 1) {
+                mmc_main_loop<1, 0> <<< mcgrid, mcblock, sharedmemsize>>>(
+                    threadphoton, oddphotons, gnode, (int*)gelem, gweight, gdref,
+                    gtype, (int*)gfacenb, gsrcelem, gnormal,
+                    gnodemua_cu, NULL,
+                    gdetphoton, gdetected, gseed, (int*)gprogress, genergy, greporter,
+                    gsrcpattern, greplayweight, greplaytime, greplayseed, gphotonseed, gdebugdata);
+            } else {
+                mmc_main_loop<0, 0> <<< mcgrid, mcblock, sharedmemsize>>>(
+                    threadphoton, oddphotons, gnode, (int*)gelem, gweight, gdref,
+                    gtype, (int*)gfacenb, gsrcelem, gnormal,
+                    NULL, NULL,
+                    gdetphoton, gdetected, gseed, (int*)gprogress, genergy, greporter,
+                    gsrcpattern, greplayweight, greplaytime, greplayseed, gphotonseed, gdebugdata);
+            }
 
             #pragma omp master
             {
@@ -1347,6 +1387,15 @@ are more than what your have specified (%d), please use the --maxjumpdebug optio
     CUDA_ASSERT(cudaFree(gfacenb));
     CUDA_ASSERT(cudaFree(gsrcelem));
     CUDA_ASSERT(cudaFree(gnormal));
+
+    if (gnodemua_cu) {
+        CUDA_ASSERT(cudaFree(gnodemua_cu));
+    }
+
+    if (gnodemusp_cu) {
+        CUDA_ASSERT(cudaFree(gnodemusp_cu));
+    }
+
     CUDA_ASSERT(cudaFree(gseed));
     CUDA_ASSERT(cudaFree(gdetphoton));
     CUDA_ASSERT(cudaFree(gweight));

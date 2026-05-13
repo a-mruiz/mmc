@@ -272,6 +272,10 @@ void mcx_initcfg(mcconfig* cfg) {
     cfg->srcdata = NULL;
     cfg->srcid = 0;
     cfg->adjointmode = 0;
+    cfg->nodemua = NULL;
+    cfg->nodemusp = NULL;
+    cfg->isnodalmua = 0;
+    cfg->isnodalmusp = 0;
     cfg->detdir = NULL;
     cfg->exportadjoint = NULL;
     cfg->exportjacob = NULL;
@@ -427,6 +431,16 @@ void mcx_clearcfg(mcconfig* cfg) {
     if (cfg->detdir) {
         free(cfg->detdir);
         cfg->detdir = NULL;
+    }
+
+    if (cfg->nodemua) {
+        free(cfg->nodemua);
+        cfg->nodemua = NULL;
+    }
+
+    if (cfg->nodemusp) {
+        free(cfg->nodemusp);
+        cfg->nodemusp = NULL;
     }
 
     if (cfg->flog && cfg->flog != stdout && cfg->flog != stderr) {

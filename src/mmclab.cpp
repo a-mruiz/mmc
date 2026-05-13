@@ -744,6 +744,8 @@ void mmc_set_field(const mxArray* root, const mxArray* item, int idx, mcconfig* 
     GET_ONE_FIELD(cfg, maxjumpdebug)
     GET_ONE_FIELD(cfg, srcid)
     GET_ONE_FIELD(cfg, adjointmode)
+    GET_ONE_FIELD(cfg, isnodalmua)
+    GET_ONE_FIELD(cfg, isnodalmusp)
     GET_VEC3_FIELD(cfg, srcpos)
     GET_VEC34_FIELD(cfg, srcdir)
     GET_VEC3_FIELD(cfg, steps)
@@ -1182,6 +1184,42 @@ void mmc_set_field(const mxArray* root, const mxArray* item, int idx, mcconfig* 
             }
 
         printf("mmc.detdir=[%d,4];\n", nd);
+    } else if (strcmp(name, "nodemua") == 0) {
+        /* per-node absorption coefficient array, length mesh.nn; auto-sets isnodalmua. */
+        arraydim = mxGetDimensions(item);
+        int nn = (int)(arraydim[0] * arraydim[1]);
+
+        if (cfg->nodemua) {
+            free(cfg->nodemua);
+        }
+
+        cfg->nodemua = (float*)malloc(nn * sizeof(float));
+        double* val = mxGetPr(item);
+
+        for (i = 0; i < nn; i++) {
+            cfg->nodemua[i] = (float)val[i];
+        }
+
+        cfg->isnodalmua = 1;
+        printf("mmc.nodemua=[%d,1];\n", nn);
+    } else if (strcmp(name, "nodemusp") == 0) {
+        /* per-node reduced scattering coefficient, length mesh.nn; auto-sets isnodalmusp. */
+        arraydim = mxGetDimensions(item);
+        int nn = (int)(arraydim[0] * arraydim[1]);
+
+        if (cfg->nodemusp) {
+            free(cfg->nodemusp);
+        }
+
+        cfg->nodemusp = (float*)malloc(nn * sizeof(float));
+        double* val = mxGetPr(item);
+
+        for (i = 0; i < nn; i++) {
+            cfg->nodemusp[i] = (float)val[i];
+        }
+
+        cfg->isnodalmusp = 1;
+        printf("mmc.nodemusp=[%d,1];\n", nn);
     } else if (strcmp(name, "compute") == 0) {
         int len = mxGetNumberOfElements(item);
         const char* computebackend[] = {"sse", "opencl", "cuda", "optix", ""};
