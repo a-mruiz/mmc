@@ -520,6 +520,8 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
         IPARAM_TO_MACRO(opt, param, detnum);
         IPARAM_TO_MACRO(opt, param, issaveseed);
         IPARAM_TO_MACRO(opt, param, nf);
+        IPARAM_TO_MACRO(opt, param, ne);
+        IPARAM_TO_MACRO(opt, param, nn);
         FPARAM_TO_MACRO(opt, param, omega);
         FPARAM_TO_MACRO(opt, param, oneoverc0);
         SIPARAM_TO_MACRO(opt, param, srcid);

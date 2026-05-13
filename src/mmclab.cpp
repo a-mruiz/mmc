@@ -1185,7 +1185,8 @@ void mmc_set_field(const mxArray* root, const mxArray* item, int idx, mcconfig* 
 
         printf("mmc.detdir=[%d,4];\n", nd);
     } else if (strcmp(name, "nodemua") == 0) {
-        /* per-node absorption coefficient array, length mesh.nn; auto-sets isnodalmua. */
+        /* per-node absorption coefficient array, length mesh.nn; auto-sets isnodalmua.
+         * Accepts double or single precision input (matlab default vs. explicit single()). */
         arraydim = mxGetDimensions(item);
         int nn = (int)(arraydim[0] * arraydim[1]);
 
@@ -1194,10 +1195,18 @@ void mmc_set_field(const mxArray* root, const mxArray* item, int idx, mcconfig* 
         }
 
         cfg->nodemua = (float*)malloc(nn * sizeof(float));
-        double* val = mxGetPr(item);
 
-        for (i = 0; i < nn; i++) {
-            cfg->nodemua[i] = (float)val[i];
+        if (mxIsDouble(item)) {
+            double* val = mxGetPr(item);
+
+            for (i = 0; i < nn; i++) {
+                cfg->nodemua[i] = (float)val[i];
+            }
+        } else if (mxIsSingle(item)) {
+            float* val = (float*)mxGetData(item);
+            memcpy(cfg->nodemua, val, nn * sizeof(float));
+        } else {
+            MEXERROR("cfg.nodemua must be a double or single-precision array");
         }
 
         cfg->isnodalmua = 1;
@@ -1212,10 +1221,18 @@ void mmc_set_field(const mxArray* root, const mxArray* item, int idx, mcconfig* 
         }
 
         cfg->nodemusp = (float*)malloc(nn * sizeof(float));
-        double* val = mxGetPr(item);
 
-        for (i = 0; i < nn; i++) {
-            cfg->nodemusp[i] = (float)val[i];
+        if (mxIsDouble(item)) {
+            double* val = mxGetPr(item);
+
+            for (i = 0; i < nn; i++) {
+                cfg->nodemusp[i] = (float)val[i];
+            }
+        } else if (mxIsSingle(item)) {
+            float* val = (float*)mxGetData(item);
+            memcpy(cfg->nodemusp, val, nn * sizeof(float));
+        } else {
+            MEXERROR("cfg.nodemusp must be a double or single-precision array");
         }
 
         cfg->isnodalmusp = 1;
