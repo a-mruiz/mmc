@@ -993,10 +993,11 @@ py::dict pmmc_interface(const py::dict& user_cfg) {
             int isrfforward = (mcx_config.omega > 0.f && mcx_config.seed != SEED_FROM_FILE);
             int isadjoint = MCX_IS_ADJOINT_TYPE(mcx_config.outputtype);
 
-            /* In adjoint mode the weight buffer holds nsrcslots = extrasrclen = Ns+Nd slots;
-             * otherwise it is simply cfg.srcnum. The GPU layout for adjoint is
-             * [dim.x, dim.y, dim.z, maxgate, nsrcslots] (slot index slowest). */
-            int nsrcslots = (isadjoint && mcx_config.extrasrclen > mcx_config.srcnum) ? mcx_config.extrasrclen : mcx_config.srcnum;
+            /* When extrasrclen exceeds srcnum, the kernel runs nsrcslots = extrasrclen
+             * slots in the weight buffer regardless of whether outputtype is adjoint
+             * (e.g. cfg.srcid = -2 forward-only multi-source mode). */
+            int nsrcslots = (mcx_config.extrasrclen > mcx_config.srcnum) ? mcx_config.extrasrclen : mcx_config.srcnum;
+            int ismultislot = (nsrcslots > mcx_config.srcnum);
 
             size_t datalen = (mcx_config.method == rtBLBadouelGrid) ? mcx_config.crop0.z : ( (mcx_config.basisorder) ? mesh.nn : mesh.ne);
             field_dim[0] = nsrcslots;
@@ -1011,9 +1012,12 @@ py::dict pmmc_interface(const py::dict& user_cfg) {
              * In adjoint mode, flux["flux"] has nsrcslots = srcnum+detnum slices (sources then
              * detectors-as-sources), and Jacobians go to output["jmua"], output["jd"], etc. */
             if (mcx_config.method == rtBLBadouelGrid) {
-                /* Adjoint layout: [dim.x, dim.y, dim.z, maxgate, nsrcslots] (nsrcslots last).
-                 * Non-adjoint multi-source layout: [srcnum, dim.x, dim.y, dim.z, maxgate]. */
-                if (isadjoint && nsrcslots > 1) {
+                /* multi-slot layouts use either:
+                 *   detector-adjoint slots (nsrcslots > srcnum; adjoint or srcid==-2 forward):
+                 *       voxel-fastest, gate-middle, slot-slowest -> [..., maxgate, nsrcslots]
+                 *   pattern source (nsrcslots == srcnum > 1):
+                 *       pidx-fastest                             -> [srcnum, ..., maxgate] */
+                if (ismultislot) {
                     array_dims = {(size_t)mcx_config.dim.x, (size_t)mcx_config.dim.y,
                                   (size_t)mcx_config.dim.z, (size_t)mcx_config.maxgate, (size_t)nsrcslots
                                  };
@@ -1027,8 +1031,19 @@ py::dict pmmc_interface(const py::dict& user_cfg) {
                                  };
                 }
             } else {
+                /* mesh-mode layout. Kernel write order:
+                 *   detector-adjoint slots (nsrcslots > srcnum, srcnum==1):
+                 *       field[node + gate*nn + slot*nn*maxgate]  -> shape [datalen, maxgate, nsrcslots]
+                 *   pattern source (nsrcslots == srcnum > 1):
+                 *       field[(gate*ne + eid)*srcnum + pidx]     -> shape [nsrcslots, datalen, maxgate]
+                 *   single source:
+                 *       field[node + gate*nn]                    -> shape [datalen, maxgate] */
                 if (nsrcslots > 1) {
-                    array_dims = {(size_t)nsrcslots, datalen, (size_t)mcx_config.maxgate};
+                    if (ismultislot) {
+                        array_dims = {datalen, (size_t)mcx_config.maxgate, (size_t)nsrcslots};
+                    } else {
+                        array_dims = {(size_t)nsrcslots, datalen, (size_t)mcx_config.maxgate};
+                    }
                 } else {
                     array_dims = {datalen, (size_t)mcx_config.maxgate};
                 }

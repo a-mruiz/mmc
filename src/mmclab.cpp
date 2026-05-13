@@ -433,10 +433,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                 int isrfforward = (cfg.omega > 0.f && cfg.seed != SEED_FROM_FILE);
                 int isadjoint = MCX_IS_ADJOINT_TYPE(cfg.outputtype);
 
-                /* In adjoint mode the weight buffer has nsrcslots = extrasrclen = Ns+Nd slots;
-                 * otherwise it is simply cfg.srcnum. The GPU layout for adjoint is
-                 * [dim.x, dim.y, dim.z, maxgate, nsrcslots] (slot index slowest). */
-                int nsrcslots = (isadjoint && cfg.extrasrclen > cfg.srcnum) ? cfg.extrasrclen : cfg.srcnum;
+                /* When extrasrclen exceeds srcnum, the kernel runs nsrcslots = extrasrclen
+                 * slots in the weight buffer regardless of whether outputtype is adjoint
+                 * (e.g. cfg.srcid = -2 forward-only multi-source mode). */
+                int nsrcslots = (cfg.extrasrclen > cfg.srcnum) ? cfg.extrasrclen : cfg.srcnum;
 
                 int datalen = (cfg.method == rtBLBadouelGrid) ? cfg.crop0.z : ( (cfg.basisorder) ? mesh.nn : mesh.ne);
                 fielddim[0] = nsrcslots;
@@ -448,10 +448,15 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                 /* Always output forward fluence in flux.data.
                  * In adjoint mode, flux.data has nsrcslots = srcnum+detnum slices (sources then
                  * detectors-as-sources), and the Jacobian is returned separately in flux.jmua/jd/etc. */
+                /* multi-slot layouts use either:
+                 *   detector-adjoint slots (nsrcslots > srcnum; adjoint or srcid==-2 forward):
+                 *       voxel-fastest, gate-middle, slot-slowest  ->  [..., maxgate, nsrcslots]
+                 *   pattern source (nsrcslots == srcnum > 1):
+                 *       pidx-fastest                             ->  [srcnum, ..., maxgate] */
+                int ismultislot = (nsrcslots > cfg.srcnum);
+
                 if (cfg.method == rtBLBadouelGrid) {
-                    /* Adjoint layout: [dim.x, dim.y, dim.z, maxgate, nsrcslots] (nsrcslots last).
-                     * Non-adjoint multi-source layout: [srcnum, dim.x, dim.y, dim.z, maxgate]. */
-                    if (isadjoint && nsrcslots > 1) {
+                    if (ismultislot) {
                         fielddim[0] = cfg.dim.x;
                         fielddim[1] = cfg.dim.y;
                         fielddim[2] = cfg.dim.z;
@@ -467,16 +472,33 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
                     mxComplexity cplx = (isrfforward && cfg.exportadjoint) ? mxCOMPLEX : mxREAL;
 
-                    if (isadjoint && nsrcslots > 1) {
-                        mxSetFieldByNumber(plhs[0], jstruct, 0, mmclab_assert(mxCreateNumericArray(5, fielddim, mxDOUBLE_CLASS, cplx)));
-                    } else if (cfg.srcnum > 1) {
+                    if (ismultislot || cfg.srcnum > 1) {
                         mxSetFieldByNumber(plhs[0], jstruct, 0, mmclab_assert(mxCreateNumericArray(5, fielddim, mxDOUBLE_CLASS, cplx)));
                     } else {
                         mxSetFieldByNumber(plhs[0], jstruct, 0, mmclab_assert(mxCreateNumericArray(4, &fielddim[1], mxDOUBLE_CLASS, cplx)));
                     }
                 } else {
+                    /* mesh-mode layout. Kernel write order:
+                     *   detector-adjoint slots (nsrcslots > srcnum, srcnum==1):
+                     *       field[node + gate*nn + slot*nn*maxgate]  -> dims [datalen, maxgate, nsrcslots]
+                     *   pattern source (nsrcslots == srcnum > 1):
+                     *       field[(gate*ne + eid)*srcnum + pidx]     -> dims [nsrcslots, datalen, maxgate]
+                     *   single source:
+                     *       field[node + gate*nn]                    -> dims [datalen, maxgate] */
                     if (nsrcslots > 1) {
-                        mxSetFieldByNumber(plhs[0], jstruct, 0, mmclab_assert(mxCreateNumericArray(3, fielddim, mxDOUBLE_CLASS, mxREAL)));
+                        dimtype meshfielddim[3];
+
+                        if (ismultislot) {
+                            meshfielddim[0] = datalen;
+                            meshfielddim[1] = cfg.maxgate;
+                            meshfielddim[2] = nsrcslots;
+                        } else {
+                            meshfielddim[0] = nsrcslots;
+                            meshfielddim[1] = datalen;
+                            meshfielddim[2] = cfg.maxgate;
+                        }
+
+                        mxSetFieldByNumber(plhs[0], jstruct, 0, mmclab_assert(mxCreateNumericArray(3, meshfielddim, mxDOUBLE_CLASS, mxREAL)));
                     } else {
                         mxSetFieldByNumber(plhs[0], jstruct, 0, mmclab_assert(mxCreateNumericArray(2, &fielddim[1], mxDOUBLE_CLASS, mxREAL)));
                     }
