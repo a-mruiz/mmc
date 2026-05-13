@@ -2,145 +2,111 @@
 % MMCLAB - Mesh-based RF (frequency-domain) adjoint Jacobian demo
 %
 % Same setup as demo_mmclab_mesh_adjoint.m, but with cfg.omega > 0 to
-% switch the forward solver into RF mode.
+% switch the forward solver into RF mode. The mesh BLBadouel kernel
+% now tracks complex weight (r->weight_re + i*r->weight_im) per
+% photon step using the same complex Beer-Lambert formula already
+% used in the rtBLBadouelGrid (DMMC) path:
 %
-% Two code paths are shown side-by-side:
+%     deposit(r, omega) = (w0 - w_new) / (mua + i*omega*n/c0)
 %
-%  1. cfg.method = 'grid' (mesh-input voxel-output / DMMC mode):
-%     The kernel accumulates a complex phi(r, omega) per slot on a
-%     regular voxel grid. The adjoint Jacobian post-processing produces
-%     a complex J_mua/J_D per source-detector pair:
+% with w_new = w0 * exp(-mua*L) * exp(-i*omega*n*L/c0) per step.
+% The kernel writes Re/Im fluence into separate buffer slots; the
+% basisorder=1 mesh reduction now scatters both onto nodes; the host
+% adjoint post-processing combines phi_s and phi_d into a complex
+% J_mua per source-detector pair following the same Re/Im pattern
+% as rb_femjacobian (redbird-m matlab/rbfemmatrix.cpp):
 %
-%         Re(J_mua) = Re(phi_s)*Re(phi_d) - Im(phi_s)*Im(phi_d)
-%         Im(J_mua) = Re(phi_s)*Im(phi_d) + Im(phi_s)*Re(phi_d)
+%     Re(J_mua) = Re(phi_s)*Re(phi_d) - Im(phi_s)*Im(phi_d)
+%     Im(J_mua) = Re(phi_s)*Im(phi_d) + Im(phi_s)*Re(phi_d)
 %
-%     This is the same complex-conjugate-product pattern as
-%     mcxlab/example/demo_mcx_adjoint_jacobian.m and rb_femjacobian in
-%     redbird-m matlab/rbfemmatrix.cpp.
-%
-%  2. cfg.method = 'elem' (true mesh output):
-%     The mesh-space adjoint kernel runs and returns J_mua/J_D as
-%     [nn, Ns*Nd]. However, the BLBadouel mesh ray-tracer in mmc_core.cl
-%     does NOT currently accumulate the imaginary part of the fluence
-%     (only the rtBLBadouelGrid path does), so the resulting J_mua is
-%     real-valued (phase = 0). Use 'grid' mode above when you need the
-%     complex/phase information; the mesh-mode amplitude still tracks
-%     the correct banana profile.
+% Output: flux.jmua is complex single, shape [nn, Ns*Nd].
 %
 % This file is part of Mesh-based Monte Carlo (MMC) URL:https://mcx.space/mmc
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-clear cfg cfg_grid cfg_mesh;
+clear cfg;
 
-% ---- Common geometry: 60 x 60 x 30 mm box mesh ---------------------
-[node, face, elem] = meshabox([0 0 0], [60 60 30], 4);
+% ---- Box mesh: 60 x 60 x 30 mm -------------------------------------
+[cfg.node, face, cfg.elem] = meshabox([0 0 0], [60 60 30], 4);
+cfg.elemprop = ones(size(cfg.elem, 1), 1);
 
 cfg.nphoton = 3e7;
-cfg.node = node;
-cfg.elem = elem;
-cfg.elemprop = ones(size(cfg.elem, 1), 1);
-cfg.srcpos = [30 30 0];
-cfg.srcdir = [0  0  1];
+cfg.srcpos  = [30 30 0];
+cfg.srcdir  = [0  0  1];
+
+% Two detectors at +/-10 mm from the source
 cfg.detpos = [20 30 0 1.5
               40 30 0 1.5];
 cfg.detdir = [0 0 1 0
               0 0 1 0];
-cfg.prop = [0 0 1 1; 0.005 1 0 1.37];
-cfg.tstart = 0;
-cfg.tend = 5e-9;
-cfg.tstep = 5e-9;
-cfg.omega = 2 * pi * 100e6;          % 100 MHz RF modulation
-cfg.basisorder = 1;
-cfg.outputtype  = 'adjoint';
-cfg.adjointmode = 0;
+
+cfg.prop       = [0 0 1 1; 0.005 1 0 1.37];
+cfg.tstart     = 0;
+cfg.tend       = 5e-9;
+cfg.tstep      = 5e-9;
+cfg.method     = 'elem';
+cfg.basisorder = 1;                      % nodal fluence required for adjoint
+
+% RF: 100 MHz modulation. cfg.omega is in rad/s, so omega = 2*pi*f_Hz.
+cfg.omega = 2 * pi * 100e6;
+
+cfg.outputtype  = 'adjoint';             % flux.jmua only (complex)
+cfg.adjointmode = 0;                     % 0 = full FEM
 cfg.debuglevel  = 'TP';
 
-% ---- Path 1: cfg.method = 'grid' (voxel-output adjoint, full RF complex)
-cfg_grid        = cfg;
-cfg_grid.method = 'grid';
-cfg_grid.steps  = [1 1 1];                % 1 mm voxel grid
+fprintf('\n-- Running RF mesh-mode adjoint at %.0f MHz --\n', ...
+        cfg.omega / (2 * pi * 1e6));
+flux = mmclab(cfg);
 
-fprintf('\n-- Running RF adjoint, grid output (complex J_mua expected) --\n');
-f_grid = mmclab(cfg_grid);
-
-fprintf('  grid jmua class: %s   isreal: %d   size: %s\n', ...
-        class(f_grid.jmua), isreal(f_grid.jmua), mat2str(size(f_grid.jmua)));
+% flux.jmua is complex single, shape [nn, Ns*Nd] = [nn, 2]
+% flux.data is complex double, shape [nn, maxgate, Ns+Nd]
+fprintf('  flux.jmua complex: %d   size: %s\n', ...
+        ~isreal(flux.jmua), mat2str(size(flux.jmua)));
 fprintf('  |jmua| range: [%.2e, %.2e]\n', ...
-        min(abs(f_grid.jmua(:))), max(abs(f_grid.jmua(:))));
+        min(abs(flux.jmua(:))), max(abs(flux.jmua(:))));
+fprintf('  flux.data complex: %d   size: %s\n', ...
+        ~isreal(flux.data), mat2str(size(flux.data)));
 
-% ---- Path 2: cfg.method = 'elem' (true mesh output, currently real-only)
-cfg_mesh        = cfg;
-cfg_mesh.method = 'elem';
-
-fprintf('\n-- Running RF adjoint, mesh output (real-only fallback) --\n');
-f_mesh = mmclab(cfg_mesh);
-
-fprintf('  mesh jmua class: %s   isreal: %d   size: %s\n', ...
-        class(f_mesh.jmua), isreal(f_mesh.jmua), mat2str(size(f_mesh.jmua)));
-fprintf('  |jmua| range: [%.2e, %.2e]\n', ...
-        min(abs(f_mesh.jmua(:))), max(abs(f_mesh.jmua(:))));
-
-% ---- Plot ----------------------------------------------------------
-%  Top row:  grid amplitude + grid phase, S-D pair 1, on the y=30 plane
-%  Bottom :  mesh amplitude  (no phase: see header note)              .
+% ---- Plot amplitude and phase for each S-D pair --------------------
 figure('Name', 'Mesh RF adjoint Jacobian (mmclab)', ...
-       'Position', [60 60 1300 760]);
+       'Position', [60 60 1200 720]);
 
-% Top-left: |J_mua| from grid path (S-D pair 1)
-subplot(2, 3, 1);
-J_grid = double(f_grid.jmua(:, :, :, 1));     % [Nx, Ny, Nz]
-Nx = size(J_grid, 1);
-Ny = size(J_grid, 2);
-Nz = size(J_grid, 3);
-ym = round(Ny / 2);
-sl = squeeze(abs(J_grid(:, ym, :)))';
-imagesc(0:Nx - 1, 0:Nz - 1, log10(sl + 1e-12));
-hold on;
-plot(cfg.srcpos(1), 0, 'r^', 'MarkerSize', 9, 'MarkerFaceColor', 'r');
-plot(cfg.detpos(1, 1), 0, 'bs', 'MarkerSize', 9, 'MarkerFaceColor', 'b');
-xlabel('x (mm)');
-ylabel('z (mm)');
-title('|J_{\mu_a}|  grid mode  (S-D_1, RF 100MHz)');
-colorbar;
-set(gca, 'YDir', 'normal');
+npair = size(flux.jmua, 2);
 
-% Top-middle: arg(J_mua) from grid path (S-D pair 1)
-subplot(2, 3, 2);
-ph = squeeze(angle(J_grid(:, ym, :)))' * 180 / pi;
-imagesc(0:Nx - 1, 0:Nz - 1, ph);
-hold on;
-plot(cfg.srcpos(1), 0, 'r^', 'MarkerSize', 9, 'MarkerFaceColor', 'r');
-plot(cfg.detpos(1, 1), 0, 'bs', 'MarkerSize', 9, 'MarkerFaceColor', 'b');
-xlabel('x (mm)');
-ylabel('z (mm)');
-title('arg(J_{\mu_a})  grid mode  (deg)');
-colorbar;
-colormap(gca, hsv);
-set(gca, 'YDir', 'normal');
+for k = 1:npair
+    Jamp = abs(double(flux.jmua(:, k)));
+    Jphi = angle(double(flux.jmua(:, k))) * 180 / pi;
 
-% Top-right: |J_mua| pair 2 from grid path
-subplot(2, 3, 3);
-J_grid2 = double(f_grid.jmua(:, :, :, 2));
-sl2 = squeeze(abs(J_grid2(:, ym, :)))';
-imagesc(0:Nx - 1, 0:Nz - 1, log10(sl2 + 1e-12));
-hold on;
-plot(cfg.srcpos(1), 0, 'r^', 'MarkerSize', 9, 'MarkerFaceColor', 'r');
-plot(cfg.detpos(2, 1), 0, 'bs', 'MarkerSize', 9, 'MarkerFaceColor', 'b');
-xlabel('x (mm)');
-ylabel('z (mm)');
-title('|J_{\mu_a}|  grid mode  (S-D_2)');
-colorbar;
-set(gca, 'YDir', 'normal');
-
-% Bottom row: mesh-mode amplitudes (no phase available -- see header note)
-for k = 1:size(f_mesh.jmua, 2)
-    subplot(2, 3, 3 + k);
-    Jamp = abs(double(f_mesh.jmua(:, k)));
+    subplot(2, npair, k);
     plotmesh([cfg.node, log10(Jamp + 1e-12)], cfg.elem, 'y=30', ...
              'facecolor', 'interp', 'linestyle', 'none');
     view([0 1 0]);
     colorbar;
-    title(sprintf('|J_{\\mu_a}|  mesh mode  (S-D_%d, amp only)', k));
-end
+    title(sprintf('|J_{\\mu_a}|  S-D_%d  (RF 100 MHz)', k));
 
-sgtitle('RF (100 MHz) adjoint Jacobian: grid (complex) vs mesh (real-only)');
+    subplot(2, npair, npair + k);
+    plotmesh([cfg.node, Jphi], cfg.elem, 'y=30', ...
+             'facecolor', 'interp', 'linestyle', 'none');
+    view([0 1 0]);
+    colorbar;
+    title(sprintf('arg(J_{\\mu_a})  S-D_%d  (deg)', k));
+end
+sgtitle('Mesh-mode RF (100 MHz) adjoint Jacobian J_{\mu_a}: amplitude and phase');
+
+% ---- Consistency: J_mua ?= phi_S * phi_D (complex product) ----------
+phi_src = double(squeeze(flux.data(:, 1, 1)));    % complex if RF
+phi_d1  = double(squeeze(flux.data(:, 1, 2)));
+prod_sd = phi_src .* phi_d1;
+mask    = (abs(prod_sd) > 1e-12) & (abs(flux.jmua(:, 1)) > 1e-12);
+
+if any(mask)
+    cc_amp = corrcoef(log10(abs(prod_sd(mask))), log10(abs(double(flux.jmua(mask, 1)))));
+    fprintf('\nConsistency (log|.| corrcoef):  |J_mua(S,D_1)| vs |phi_S * phi_D_1| = %.4f\n', ...
+            cc_amp(1, 2));
+    % phase agreement: J_mua's complex phase should track phi_S * phi_D_1's
+    % phase up to a global FEM weighting that's real (-V_e/10) and therefore
+    % adds no phase offset.
+    dphase = mod(angle(double(flux.jmua(mask, 1))) - angle(prod_sd(mask)) + pi, 2 * pi) - pi;
+    fprintf('Phase difference (rad):  median %.4f   max |.| %.4f\n', ...
+            median(dphase), max(abs(dphase)));
+end

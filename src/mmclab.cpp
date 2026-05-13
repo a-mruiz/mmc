@@ -485,6 +485,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                      *       field[(gate*ne + eid)*srcnum + pidx]     -> dims [nsrcslots, datalen, maxgate]
                      *   single source:
                      *       field[node + gate*nn]                    -> dims [datalen, maxgate] */
+                    mxComplexity mcplx = (isrfforward && cfg.exportadjoint) ? mxCOMPLEX : mxREAL;
+
                     if (nsrcslots > 1) {
                         dimtype meshfielddim[3];
 
@@ -498,9 +500,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                             meshfielddim[2] = cfg.maxgate;
                         }
 
-                        mxSetFieldByNumber(plhs[0], jstruct, 0, mmclab_assert(mxCreateNumericArray(3, meshfielddim, mxDOUBLE_CLASS, mxREAL)));
+                        mxSetFieldByNumber(plhs[0], jstruct, 0, mmclab_assert(mxCreateNumericArray(3, meshfielddim, mxDOUBLE_CLASS, mcplx)));
                     } else {
-                        mxSetFieldByNumber(plhs[0], jstruct, 0, mmclab_assert(mxCreateNumericArray(2, &fielddim[1], mxDOUBLE_CLASS, mxREAL)));
+                        mxSetFieldByNumber(plhs[0], jstruct, 0, mmclab_assert(mxCreateNumericArray(2, &fielddim[1], mxDOUBLE_CLASS, mcplx)));
                     }
                 }
 
