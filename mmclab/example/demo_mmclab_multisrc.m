@@ -52,8 +52,8 @@ fprintf('  flux.data size: %s   nsrcslots=%d\n', ...
 cfg1            = cfg;
 cfg1.srcid      = 1;                     % only the first slot (matches srcpos row 1)
 cfg1.nphoton    = cfg.nphoton / 2;       % half the budget -> matches the
-                                         % per-slot photon count of the
-                                         % srcid=-1 run above
+% per-slot photon count of the
+% srcid=-1 run above
 
 fprintf('\n-- Running srcid=1 only (slot 1, %.0e photons) --\n', cfg1.nphoton);
 flux1 = mmclab(cfg1);
@@ -82,7 +82,10 @@ view([0 1 0]);
 colorbar;
 title('Single run: srcid=1 only');
 % sgtitle was added in Octave 8.0; wrap so older Octave silently skips it.
-try; sgtitle('Multi-source forward via cfg.srcpos = [...; ...]'); catch; end
+try
+    sgtitle('Multi-source forward via cfg.srcpos = [...; ...]');
+catch
+end
 
 % Relative agreement between slot-1 of the multi-run and the dedicated
 % single-source run (should be within Monte Carlo noise, a few percent).

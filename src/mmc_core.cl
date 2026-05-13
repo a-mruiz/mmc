@@ -822,9 +822,9 @@ __device__ float branchless_badouel_raytet(ray* r, __constant MCXParam* gcfg, __
                     float a_im  = GPU_PARAM(gcfg, omega) * prop.n * GPU_PARAM(gcfg, oneoverc0);
                     float a_mag2 = prop.mua * prop.mua + a_im * a_im;
                     bl_dep_re_rf = (a_mag2 > 0.f) ? (dw_re * prop.mua + dw_im * a_im) / a_mag2
-                                                  : (w0_re * r->Lmove);
+                                   : (w0_re * r->Lmove);
                     bl_dep_im    = (a_mag2 > 0.f) ? (dw_im * prop.mua - dw_re * a_im) / a_mag2
-                                                  : (w0_im * r->Lmove);
+                                   : (w0_im * r->Lmove);
                     /* Replace the real-only ww with the matched complex Re(deposit), and
                      * advance r->weight_im for the next step. r->weight (real) is already
                      * att*real(rotation), match it. */
@@ -860,6 +860,7 @@ __device__ float branchless_badouel_raytet(ray* r, __constant MCXParam* gcfg, __
                             if ((GPU_PARAM(gcfg, omega) > 0.f) & (GPU_PARAM(gcfg, seed) != SEED_FROM_FILE)) {
                                 weight[r->oldidx + gcfg->crop0.w * 2] += r->oldweight_im;
                             }
+
 #endif
                         } else if (GPU_PARAM(gcfg, srctype) == stPattern) {
 
@@ -919,6 +920,7 @@ __device__ float branchless_badouel_raytet(ray* r, __constant MCXParam* gcfg, __
                         if ((GPU_PARAM(gcfg, omega) > 0.f) & (GPU_PARAM(gcfg, seed) != SEED_FROM_FILE)) {
                             weight[newidx + gcfg->crop0.w * 2] += r->oldweight_im;
                         }
+
 #endif
                     } else if (GPU_PARAM(gcfg, srctype) == stPattern) {
 

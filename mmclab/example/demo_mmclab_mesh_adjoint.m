@@ -52,8 +52,8 @@ cfg.basisorder = 1;                      % nodal fluence required for J_D
 % adjoint_mua_d -> dual output, fills both flux.jmua and flux.jd
 cfg.outputtype  = 'adjoint_mua_d';
 cfg.adjointmode = 0;                     % 0 = full FEM (default),
-                                         % 1 = nodal-adjoint approx
-                                         %     (rbjacmuafast.m formula)
+% 1 = nodal-adjoint approx
+%     (rbjacmuafast.m formula)
 cfg.debuglevel = 'TP';
 
 fprintf('\n-- Running CW mesh-mode adjoint (Ns=1, Nd=3 -> 3 J_mua + 3 J_D) --\n');

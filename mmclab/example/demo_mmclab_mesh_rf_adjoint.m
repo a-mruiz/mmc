@@ -91,7 +91,10 @@ for k = 1:npair
     colorbar;
     title(sprintf('arg(J_{\\mu_a})  S-D_%d  (deg)', k));
 end
-try; sgtitle('Mesh-mode RF (100 MHz) adjoint Jacobian J_{\mu_a}: amplitude and phase'); catch; end
+try
+    sgtitle('Mesh-mode RF (100 MHz) adjoint Jacobian J_{\mu_a}: amplitude and phase');
+catch
+end
 
 % ---- Consistency: J_mua ?= phi_S * phi_D (complex product) ----------
 phi_src = double(squeeze(flux.data(:, 1, 1)));    % complex if RF
