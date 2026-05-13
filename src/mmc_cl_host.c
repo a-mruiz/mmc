@@ -619,7 +619,9 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
         cfg->exportfield = mesh->weight;
     }
 
-    if (cfg->exportadjoint == NULL && cfg->method == rtBLBadouelGrid && isrfforward) {
+    if (cfg->exportadjoint == NULL && isrfforward) {
+        /* Grid and mesh paths both need an imag fluence buffer when RF is on so
+         * the adjoint Jacobian post-processing can read phi_im(node). */
         cfg->exportadjoint = (float*)calloc(fieldlen, sizeof(float));
     }
 
@@ -875,11 +877,18 @@ is more than what your have specified (%d), please use the -H option to specify 
 
                         for (j = 0; j < mesh->ne; j++) {
                             float ww = field[slot_off_f + f_gate_off + j] * 0.25f;
+                            float ww_im = (isrfforward && cfg->exportadjoint)
+                                          ? field[slot_off_f + f_gate_off + j + fieldlen] * 0.25f : 0.f;
                             int k;
 
                             for (k = 0; k < mesh->elemlen; k++) {
-                                cfg->exportfield[slot_off_e + e_gate_off
-                                                            + mesh->elem[j * mesh->elemlen + k] - 1] += ww;
+                                size_t nidx = slot_off_e + e_gate_off
+                                              + mesh->elem[j * mesh->elemlen + k] - 1;
+                                cfg->exportfield[nidx] += ww;
+
+                                if (isrfforward && cfg->exportadjoint) {
+                                    cfg->exportadjoint[nidx] += ww_im;
+                                }
                             }
                         }
                     }
@@ -930,6 +939,7 @@ is more than what your have specified (%d), please use the -H option to specify 
          * populated (single-source pattern path). */
         if (cfg->extrasrclen > cfg->srcnum && cfg->exportfield) {
             double avg_normalizor = sum_normalizer / cfg->srcnum;
+            int mesh_basis1 = (cfg->method != rtBLBadouelGrid) && (cfg->basisorder != 0);
             size_t datalen = (cfg->method == rtBLBadouelGrid)
                              ? (size_t)cfg->crop0.z
                              : (size_t)((cfg->basisorder) ? mesh->nn : mesh->ne);
@@ -943,8 +953,25 @@ is more than what your have specified (%d), please use the -H option to specify 
                     slot_normalizor = avg_normalizor * (w0 / cfg->srcdata[slot].srcpos.w);
                 }
 
-                for (size_t ki = 0; ki < slot_stride; ki++) {
-                    cfg->exportfield[(size_t)slot * slot_stride + ki] *= slot_normalizor;
+                /* mesh + basisorder=1: mesh_normalize divides slot 0 by nvol[j] per node
+                 * before applying its scalar normalizer. The broadcast path for slot>=1
+                 * has to replicate that per-node division. */
+                if (mesh_basis1) {
+                    for (int t = 0; t < cfg->maxgate; t++) {
+                        for (int j = 0; j < (int)datalen; j++) {
+                            size_t idx = (size_t)slot * slot_stride + (size_t)t * datalen + j;
+
+                            if (mesh->nvol[j] > 0.f) {
+                                cfg->exportfield[idx] /= mesh->nvol[j];
+                            }
+
+                            cfg->exportfield[idx] *= slot_normalizor;
+                        }
+                    }
+                } else {
+                    for (size_t ki = 0; ki < slot_stride; ki++) {
+                        cfg->exportfield[(size_t)slot * slot_stride + ki] *= slot_normalizor;
+                    }
                 }
             }
         }

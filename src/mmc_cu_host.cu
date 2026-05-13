@@ -970,6 +970,7 @@ are more than what your have specified (%d), please use the --maxjumpdebug optio
              * populated. */
             if (cfg->extrasrclen > cfg->srcnum && cfg->exportfield) {
                 double avg_normalizor = sum_normalizer / cfg->srcnum;
+                int mesh_basis1 = (cfg->method != rtBLBadouelGrid) && (cfg->basisorder != 0);
                 size_t datalen = (cfg->method == rtBLBadouelGrid)
                                  ? (size_t)cfg->crop0.z
                                  : (size_t)((cfg->basisorder) ? mesh->nn : mesh->ne);
@@ -983,8 +984,24 @@ are more than what your have specified (%d), please use the --maxjumpdebug optio
                         slot_normalizor = avg_normalizor * (w0 / cfg->srcdata[slot].srcpos.w);
                     }
 
-                    for (size_t ki = 0; ki < slot_stride; ki++) {
-                        cfg->exportfield[(size_t)slot * slot_stride + ki] *= slot_normalizor;
+                    /* mesh + basisorder=1: mesh_normalize divides slot 0 by nvol[j] per
+                     * node before applying its scalar normalizer; replicate that here. */
+                    if (mesh_basis1) {
+                        for (int t = 0; t < cfg->maxgate; t++) {
+                            for (int j = 0; j < (int)datalen; j++) {
+                                size_t idx = (size_t)slot * slot_stride + (size_t)t * datalen + j;
+
+                                if (mesh->nvol[j] > 0.f) {
+                                    cfg->exportfield[idx] /= mesh->nvol[j];
+                                }
+
+                                cfg->exportfield[idx] *= slot_normalizor;
+                            }
+                        }
+                    } else {
+                        for (size_t ki = 0; ki < slot_stride; ki++) {
+                            cfg->exportfield[(size_t)slot * slot_stride + ki] *= slot_normalizor;
+                        }
                     }
                 }
             }
