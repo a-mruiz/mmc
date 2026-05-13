@@ -97,7 +97,8 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
     cl_mem* gprogress = NULL, *gdetected = NULL, *gphotonseed = NULL; /*write-only buffers*/
 
     int isrfforward = (cfg->omega > 0.f && cfg->seed != SEED_FROM_FILE);
-    cl_uint nsrcslots = (cfg->extrasrclen > 0) ? (cl_uint)cfg->extrasrclen : 1u;
+    /* cfg->srcid > 0 selects a single slot from srcdata, collapsing the field buffer to one slot. */
+    cl_uint nsrcslots = (cfg->extrasrclen > 0 && cfg->srcid <= 0) ? (cl_uint)cfg->extrasrclen : 1u;
     cl_uint meshlen = ((cfg->method == rtBLBadouelGrid) ? cfg->crop0.z : mesh->ne) * cfg->srcnum * nsrcslots;    /**< total output data length */
     cfg->crop0.w = meshlen * cfg->maxgate;    /**< total output data length, before double-buffer expansion */
 
@@ -139,7 +140,7 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
         cfg->issaveseed, cfg->seed, cfg->maxjumpdebug,
         cfg->omega,
         (float)(3.335640951981520e-12),   /* oneoverc0 */
-        (cfg->extrasrclen > 0 && cfg->srcid >= 0) ? -1 : cfg->srcid,  /* srcid < 0 triggers multi-source mode */
+        (cfg->extrasrclen > 0 && cfg->srcid == 0) ? -1 : cfg->srcid,  /* srcid<0 multi-slot, srcid>0 single slot, srcid==0 with srcdata: auto-promote to -1 */
         cfg->extrasrclen,
         (int)(mesh->prop + 1 + cfg->isextdet)  /* srcpropoffset */
     };

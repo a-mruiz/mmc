@@ -228,8 +228,9 @@ void mmc_run_simulation(mcconfig* cfg, tetmesh* mesh, raytracer* tracer, GPUInfo
 
     MCXReporter* greporter;
     int isrfforward = (cfg->omega > 0.f && cfg->seed != SEED_FROM_FILE);
-    /* For adjoint/multi-source mode, expand meshlen to cover all source slots */
-    uint nsrcslots = (cfg->extrasrclen > 0) ? (uint)cfg->extrasrclen : 1u;
+    /* For adjoint/multi-source mode, expand meshlen to cover all source slots.
+     * cfg->srcid > 0 selects a single slot from srcdata, so the field buffer collapses to one slot. */
+    uint nsrcslots = (cfg->extrasrclen > 0 && cfg->srcid <= 0) ? (uint)cfg->extrasrclen : 1u;
     uint meshlen = ((cfg->method == rtBLBadouelGrid) ? cfg->crop0.z : mesh->ne) * cfg->srcnum * nsrcslots;
     cfg->crop0.w = meshlen * cfg->maxgate; // offset for the second (double) buffer
 
@@ -296,7 +297,7 @@ void mmc_run_simulation(mcconfig* cfg, tetmesh* mesh, raytracer* tracer, GPUInfo
         cfg->maxjumpdebug,
         cfg->omega,
         (float)(3.335640951981520e-12),   /* oneoverc0 = 1/C0 in s/mm */
-        (cfg->extrasrclen > 0 && cfg->srcid >= 0) ? -1 : cfg->srcid,  /* srcid < 0 triggers multi-source mode */
+        (cfg->extrasrclen > 0 && cfg->srcid == 0) ? -1 : cfg->srcid,  /* srcid<0 multi-slot, srcid>0 single slot, srcid==0 with srcdata: auto-promote to -1 */
         cfg->extrasrclen,
         (int)(mesh->prop + 1 + cfg->isextdet)  /* srcpropoffset: gmed index where extra sources start */
     };

@@ -590,6 +590,15 @@ __device__ void savedetphoton(__global float* n_det, __global uint* detectedphot
 
 #endif
             baseaddr *= (GPU_PARAM(gcfg, reclen) + 1);
+
+            /* Pack the launch slot index (1-based, matching mcx convention) into the
+             * upper 16 bits of the detid column when running in multi-source mode.
+             * Lower 16 bits keep the detector id; the upper bits stay zero for
+             * single-source runs (extrasrclen==0) so existing readers are unaffected. */
+            if (GPU_PARAM(gcfg, extrasrclen) > 0 && GPU_PARAM(gcfg, srcid) <= 0) {
+                detid |= ((unsigned int)(r->posidx + 1u) << 16);
+            }
+
             n_det[baseaddr++] = detid;
 
             for (i = 0; i < (GPU_PARAM(gcfg, maxmedia) << 1); i++) {
@@ -1290,13 +1299,30 @@ __device__ void launchnewphoton(__constant MCXParam* gcfg, ray* r, __global FLOA
     int canfocus = 1;
     float3 origin = r->p0;
 
-    /* Multi-source / adjoint mode: randomly select a source from gmed[] (packed after media) */
-    if (GPU_PARAM(gcfg, srcid) < 0 && GPU_PARAM(gcfg, extrasrclen) > 0) {
-        /* uniformly select a source slot */
-        unsigned int slot = (unsigned int)(rand_uniform01(ran) * GPU_PARAM(gcfg, extrasrclen));
+    /* Multi-source / single-slot mode: pick a source slot from srcdata[] (packed in gmed[] after media).
+     *   srcid <  0  : pick a slot uniformly at random (every photon may go to a different slot;
+     *                 r->posidx routes its deposits to the per-slot field buffer offset).
+     *   srcid >  0  : launch only from srcdata[srcid-1] (1-based selector; matches mcx parity).
+     *                 Field buffer collapses to one slot, so r->posidx is forced to 0.
+     */
+    if (GPU_PARAM(gcfg, extrasrclen) > 0
+            && (GPU_PARAM(gcfg, srcid) < 0
+                || (GPU_PARAM(gcfg, srcid) > 0 && GPU_PARAM(gcfg, srcid) <= GPU_PARAM(gcfg, extrasrclen)))) {
+        unsigned int slot;            /* slot index into srcdata[] (source geometry) */
+        unsigned int outslot;         /* slot index into field buffer (output) */
 
-        if (slot >= (unsigned int)GPU_PARAM(gcfg, extrasrclen)) {
-            slot = (unsigned int)GPU_PARAM(gcfg, extrasrclen) - 1u;
+        if (GPU_PARAM(gcfg, srcid) < 0) {
+            /* uniformly select a source slot */
+            slot = (unsigned int)(rand_uniform01(ran) * GPU_PARAM(gcfg, extrasrclen));
+
+            if (slot >= (unsigned int)GPU_PARAM(gcfg, extrasrclen)) {
+                slot = (unsigned int)GPU_PARAM(gcfg, extrasrclen) - 1u;
+            }
+
+            outslot = slot;
+        } else {
+            slot = (unsigned int)(GPU_PARAM(gcfg, srcid) - 1);    /* 1-based to 0-based */
+            outslot = 0u;                                          /* collapse to one output slot */
         }
 
         /* Extra sources are packed into gmed[] starting at srcpropoffset;
@@ -1311,7 +1337,7 @@ __device__ void launchnewphoton(__constant MCXParam* gcfg, ray* r, __global FLOA
         float src_dir_y = srcs[slot].srcdir.y;
         float src_dir_z = srcs[slot].srcdir.z;
 
-        r->posidx = slot;  /* record source slot for field-buffer indexing */
+        r->posidx = outslot;  /* record source slot for field-buffer indexing */
         r->p0.x = src_pos_x;
         r->p0.y = src_pos_y;
         r->p0.z = src_pos_z;
