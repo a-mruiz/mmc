@@ -530,20 +530,36 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                     memcpy((double*)mxGetPr(mxGetFieldByNumber(plhs[0], jstruct, 1)), mesh.dref, fielddim[1]*fielddim[2]*sizeof(double));
                 }
 
-                /* Output adjoint Jacobian in separate struct fields (flux.jmua, flux.jd, etc.) */
-                if (isadjoint && cfg.exportjacob && cfg.method == rtBLBadouelGrid) {
+                /* Output adjoint Jacobian in separate struct fields (flux.jmua, flux.jd, etc.).
+                 * Grid mode: shape [Nx, Ny, Nz, maxgate, Ns*Nd].
+                 * Mesh mode (basisorder=1): shape [nn, Ns*Nd] (CW, no maxgate dim). */
+                if (isadjoint && cfg.exportjacob) {
                     int Ns = (cfg.extrasrclen > cfg.detnum) ? (cfg.extrasrclen - cfg.detnum) : 1;
                     int Nd = (cfg.detnum > 0)               ?  cfg.detnum                   : 1;
                     int nsrcpairs = Ns * Nd;
                     int isdual = MCX_IS_DUAL_ADJOINT_TYPE(cfg.outputtype);
                     mxComplexity jcplx = isrfforward ? mxCOMPLEX : mxREAL;
-                    size_t adjlen = (size_t)cfg.dim.x * cfg.dim.y * cfg.dim.z * cfg.maxgate * nsrcpairs;
+                    int jndim;
+                    size_t adjlen;
 
-                    fielddim[0] = cfg.dim.x;
-                    fielddim[1] = cfg.dim.y;
-                    fielddim[2] = cfg.dim.z;
-                    fielddim[3] = cfg.maxgate;
-                    fielddim[4] = nsrcpairs;
+                    if (cfg.method == rtBLBadouelGrid) {
+                        adjlen = (size_t)cfg.dim.x * cfg.dim.y * cfg.dim.z * cfg.maxgate * nsrcpairs;
+                        fielddim[0] = cfg.dim.x;
+                        fielddim[1] = cfg.dim.y;
+                        fielddim[2] = cfg.dim.z;
+                        fielddim[3] = cfg.maxgate;
+                        fielddim[4] = nsrcpairs;
+                        jndim = 5;
+                    } else {
+                        /* mesh mode: nodal output, CW only */
+                        adjlen = (size_t)mesh.nn * nsrcpairs;
+                        fielddim[0] = mesh.nn;
+                        fielddim[1] = nsrcpairs;
+                        fielddim[2] = 0;
+                        fielddim[3] = 0;
+                        fielddim[4] = 0;
+                        jndim = 2;
+                    }
 
                     /* Determine Jacobian field name(s) based on output type */
                     const char* jname1 = "jmua";
@@ -586,7 +602,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                             mxAddField(plhs[0], fname);
                         }
 
-                        mxArray* jfield = mmclab_assert(mxCreateNumericArray(5, fielddim, mxSINGLE_CLASS, jcplx));
+                        mxArray* jfield = mmclab_assert(mxCreateNumericArray(jndim, fielddim, mxSINGLE_CLASS, jcplx));
 
                         if (!isrfforward) {
                             memcpy((float*)mxGetData(jfield), re_data, adjlen * sizeof(float));
@@ -704,6 +720,8 @@ void mmc_set_field(const mxArray* root, const mxArray* item, int idx, mcconfig* 
     GET_ONE_FIELD(cfg, mcmethod)
     GET_ONE_FIELD(cfg, maxdetphoton)
     GET_ONE_FIELD(cfg, maxjumpdebug)
+    GET_ONE_FIELD(cfg, srcid)
+    GET_ONE_FIELD(cfg, adjointmode)
     GET_VEC3_FIELD(cfg, srcpos)
     GET_VEC34_FIELD(cfg, srcdir)
     GET_VEC3_FIELD(cfg, steps)

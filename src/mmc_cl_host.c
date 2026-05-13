@@ -918,6 +918,220 @@ is more than what your have specified (%d), please use the -H option to specify 
         }
     }
 
+    /* Mesh-mode adjoint Jacobian post-processing (OpenCL): FEM/nodal formulas on a tet mesh. */
+    if (cfg->issave2pt && MCX_IS_ADJOINT_TYPE(cfg->outputtype) && cfg->method != rtBLBadouelGrid &&
+            cfg->basisorder && cfg->extrasrclen > 0 && cfg->detdir != NULL && cfg->exportfield) {
+        unsigned int Ns          = (unsigned int)(cfg->extrasrclen - cfg->detnum);
+        unsigned int Nd          = (unsigned int)cfg->detnum;
+        int isdual               = MCX_IS_DUAL_ADJOINT_TYPE(cfg->outputtype);
+        int isnodal_approx       = (cfg->adjointmode == 1);
+        unsigned int datalen     = (unsigned int)mesh->nn;
+        size_t adjointlen        = (size_t)datalen * Ns * Nd;
+        size_t single_exportlen  = adjointlen * (isrfforward ? 2 : 1);
+        size_t exportlen_adj     = single_exportlen * (isdual ? 2 : 1);
+        int compute_jmua = (cfg->outputtype == otAdjoint || isdual);
+        int compute_jd   = (cfg->outputtype == otAdjointDcoeff || isdual);
+
+        /* Convert double exportfield to float */
+        float* hfield_re = (float*)malloc(sizeof(float) * fieldlen);
+
+        for (size_t k = 0; k < fieldlen; k++) {
+            hfield_re[k] = (float)cfg->exportfield[k];
+        }
+
+        cl_mem gcl_field_re = clCreateBuffer(mcxcontext, RO_MEM, sizeof(float) * fieldlen, hfield_re, &status);
+        OCL_ASSERT(status);
+        free(hfield_re);
+
+        cl_mem gcl_field_im = (cl_mem)0;
+
+        if (isrfforward && cfg->exportadjoint) {
+            gcl_field_im = clCreateBuffer(mcxcontext, RO_MEM, sizeof(float) * fieldlen, cfg->exportadjoint, &status);
+            OCL_ASSERT(status);
+        }
+
+        /* Upload mesh helpers */
+        cl_mem gcl_elem = clCreateBuffer(mcxcontext, RO_MEM, sizeof(int) * mesh->ne * mesh->elemlen, mesh->elem, &status);
+        OCL_ASSERT(status);
+        cl_mem gcl_evol = clCreateBuffer(mcxcontext, RO_MEM, sizeof(float) * mesh->ne, mesh->evol, &status);
+        OCL_ASSERT(status);
+
+        cl_mem gcl_deldotdel = (cl_mem)0, gcl_nvol = (cl_mem)0;
+
+        if (compute_jd || !isnodal_approx) {
+            if (mesh->deldotdel == NULL) {
+                mesh_deldotdel(mesh);
+            }
+
+            float* deldotdel_f = (float*)malloc(sizeof(float) * mesh->ne * 10);
+
+            for (size_t k = 0; k < (size_t)mesh->ne * 10; k++) {
+                deldotdel_f[k] = (float)mesh->deldotdel[k];
+            }
+
+            gcl_deldotdel = clCreateBuffer(mcxcontext, RO_MEM, sizeof(float) * mesh->ne * 10, deldotdel_f, &status);
+            OCL_ASSERT(status);
+            free(deldotdel_f);
+        }
+
+        if (isnodal_approx && compute_jmua) {
+            gcl_nvol = clCreateBuffer(mcxcontext, RO_MEM, sizeof(float) * mesh->nn, mesh->nvol, &status);
+            OCL_ASSERT(status);
+        }
+
+        /* Zeroed output buffers */
+        float* hzero = (float*)calloc(single_exportlen, sizeof(float));
+        cl_mem gcl_jmua = (cl_mem)0, gcl_jd = (cl_mem)0;
+
+        if (compute_jmua) {
+            gcl_jmua = clCreateBuffer(mcxcontext, RW_MEM, sizeof(float) * single_exportlen, hzero, &status);
+            OCL_ASSERT(status);
+        }
+
+        if (compute_jd) {
+            gcl_jd = clCreateBuffer(mcxcontext, RW_MEM, sizeof(float) * single_exportlen, hzero, &status);
+            OCL_ASSERT(status);
+        }
+
+        free(hzero);
+
+        size_t adj_local = 256;
+
+        /* nodal-approximation J_mua kernel (one thread per node) */
+        if (isnodal_approx && compute_jmua) {
+            cl_kernel kern = clCreateKernel(mcxprogram, "mmc_adjoint_mesh_nodal_kernel", &status);
+            OCL_ASSERT(status);
+            cl_uint nn_arg = (cl_uint)mesh->nn, maxgate_arg = (cl_uint)cfg->maxgate;
+            OCL_ASSERT(clSetKernelArg(kern, 0, sizeof(cl_mem), &gcl_field_re));
+            OCL_ASSERT(clSetKernelArg(kern, 1, sizeof(cl_mem), gcl_field_im ? &gcl_field_im : NULL));
+            OCL_ASSERT(clSetKernelArg(kern, 2, sizeof(cl_mem), &gcl_nvol));
+            OCL_ASSERT(clSetKernelArg(kern, 3, sizeof(cl_mem), &gcl_jmua));
+            OCL_ASSERT(clSetKernelArg(kern, 4, sizeof(cl_uint), &nn_arg));
+            OCL_ASSERT(clSetKernelArg(kern, 5, sizeof(cl_uint), &maxgate_arg));
+            OCL_ASSERT(clSetKernelArg(kern, 6, sizeof(cl_uint), &Ns));
+            OCL_ASSERT(clSetKernelArg(kern, 7, sizeof(cl_uint), &Nd));
+            size_t adj_global = ((mesh->nn + adj_local - 1) / adj_local) * adj_local;
+            OCL_ASSERT(clEnqueueNDRangeKernel(mcxqueue[0], kern, 1, NULL, &adj_global, &adj_local, 0, NULL, NULL));
+            OCL_ASSERT(clFinish(mcxqueue[0]));
+            clReleaseKernel(kern);
+        }
+
+        /* Full FEM kernel (one thread per element) */
+        if ((!isnodal_approx && compute_jmua) || compute_jd) {
+            cl_kernel kern = clCreateKernel(mcxprogram, "mmc_adjoint_mesh_full_kernel", &status);
+            OCL_ASSERT(status);
+            cl_uint ne_arg = (cl_uint)mesh->ne, nn_arg = (cl_uint)mesh->nn;
+            cl_uint maxgate_arg = (cl_uint)cfg->maxgate;
+            cl_uint elemlen_arg = (cl_uint)mesh->elemlen;
+            cl_int  isnodal_arg = 1; /* output is nodal */
+            cl_mem nulljmua = (cl_mem)0;
+            cl_mem* jmua_arg = isnodal_approx ? &nulljmua : &gcl_jmua;
+            OCL_ASSERT(clSetKernelArg(kern,  0, sizeof(cl_mem), &gcl_field_re));
+            OCL_ASSERT(clSetKernelArg(kern,  1, sizeof(cl_mem), gcl_field_im ? &gcl_field_im : NULL));
+            OCL_ASSERT(clSetKernelArg(kern,  2, sizeof(cl_mem), &gcl_elem));
+            OCL_ASSERT(clSetKernelArg(kern,  3, sizeof(cl_mem), &gcl_evol));
+            OCL_ASSERT(clSetKernelArg(kern,  4, sizeof(cl_mem), &gcl_deldotdel));
+            OCL_ASSERT(clSetKernelArg(kern,  5, sizeof(cl_mem), isnodal_approx ? NULL : jmua_arg));
+            OCL_ASSERT(clSetKernelArg(kern,  6, sizeof(cl_mem), compute_jd ? &gcl_jd : NULL));
+            OCL_ASSERT(clSetKernelArg(kern,  7, sizeof(cl_uint), &ne_arg));
+            OCL_ASSERT(clSetKernelArg(kern,  8, sizeof(cl_uint), &nn_arg));
+            OCL_ASSERT(clSetKernelArg(kern,  9, sizeof(cl_uint), &maxgate_arg));
+            OCL_ASSERT(clSetKernelArg(kern, 10, sizeof(cl_uint), &Ns));
+            OCL_ASSERT(clSetKernelArg(kern, 11, sizeof(cl_uint), &Nd));
+            OCL_ASSERT(clSetKernelArg(kern, 12, sizeof(cl_uint), &elemlen_arg));
+            OCL_ASSERT(clSetKernelArg(kern, 13, sizeof(cl_int),  &isnodal_arg));
+            size_t adj_global = ((mesh->ne + adj_local - 1) / adj_local) * adj_local;
+            OCL_ASSERT(clEnqueueNDRangeKernel(mcxqueue[0], kern, 1, NULL, &adj_global, &adj_local, 0, NULL, NULL));
+            OCL_ASSERT(clFinish(mcxqueue[0]));
+            clReleaseKernel(kern);
+        }
+
+        OCL_ASSERT(clReleaseMemObject(gcl_field_re));
+
+        if (gcl_field_im) {
+            OCL_ASSERT(clReleaseMemObject(gcl_field_im));
+        }
+
+        clReleaseMemObject(gcl_elem);
+        clReleaseMemObject(gcl_evol);
+
+        if (gcl_deldotdel) {
+            clReleaseMemObject(gcl_deldotdel);
+        }
+
+        if (gcl_nvol) {
+            clReleaseMemObject(gcl_nvol);
+        }
+
+        /* Allocate output buffer */
+        if (cfg->exportjacob) {
+            free(cfg->exportjacob);
+        }
+
+        cfg->exportjacob = (float*)malloc(sizeof(float) * exportlen_adj);
+        memset(cfg->exportjacob, 0, sizeof(float) * exportlen_adj);
+
+        float jac_correction = 4.f * (float)Ns * (float)Nd;
+        float* hmua = NULL, *hjd = NULL;
+
+        if (compute_jmua) {
+            hmua = (float*)malloc(sizeof(float) * single_exportlen);
+            OCL_ASSERT(clEnqueueReadBuffer(mcxqueue[0], gcl_jmua, CL_TRUE, 0, sizeof(float) * single_exportlen, hmua, 0, NULL, NULL));
+            clReleaseMemObject(gcl_jmua);
+
+            for (size_t k = 0; k < single_exportlen; k++) {
+                hmua[k] *= jac_correction;
+            }
+        }
+
+        if (compute_jd) {
+            hjd = (float*)malloc(sizeof(float) * single_exportlen);
+            OCL_ASSERT(clEnqueueReadBuffer(mcxqueue[0], gcl_jd, CL_TRUE, 0, sizeof(float) * single_exportlen, hjd, 0, NULL, NULL));
+            clReleaseMemObject(gcl_jd);
+
+            for (size_t k = 0; k < single_exportlen; k++) {
+                hjd[k] *= jac_correction;
+            }
+        }
+
+        if (isdual) {
+            if (!isrfforward) {
+                memcpy(cfg->exportjacob,              hmua, adjointlen * sizeof(float));
+                memcpy(cfg->exportjacob + adjointlen, hjd,  adjointlen * sizeof(float));
+            } else {
+                memcpy(cfg->exportjacob,                  hmua,              adjointlen * sizeof(float));
+                memcpy(cfg->exportjacob + adjointlen,     hjd,               adjointlen * sizeof(float));
+                memcpy(cfg->exportjacob + 2 * adjointlen, hmua + adjointlen, adjointlen * sizeof(float));
+                memcpy(cfg->exportjacob + 3 * adjointlen, hjd  + adjointlen, adjointlen * sizeof(float));
+            }
+        } else {
+            float* hsrc = compute_jmua ? hmua : hjd;
+            memcpy(cfg->exportjacob, hsrc, single_exportlen * sizeof(float));
+        }
+
+        if (hmua) {
+            free(hmua);
+        }
+
+        if (hjd) {
+            free(hjd);
+        }
+
+        MMC_FPRINTF(cfg->flog, "mesh adjoint Jacobian computation complete (%s): %d ms\n",
+                    isnodal_approx ? "nodal approx" : "full FEM", GetTimeMillis() - tic);
+
+#ifndef MCX_CONTAINER
+
+        if (cfg->issave2pt && cfg->parentid == mpStandalone && cfg->exportjacob) {
+            MMC_FPRINTF(cfg->flog, "saving mesh adjoint Jacobian to file ...\t");
+            mesh_savejacob(cfg, mesh, cfg->exportjacob, (int)Ns, (int)Nd, isrfforward, isdual);
+            MMC_FPRINTF(cfg->flog, "saving Jacobian complete : %d ms\n\n", GetTimeMillis() - tic);
+            mcx_fflush(cfg->flog);
+        }
+
+#endif
+    }
+
     /* Adjoint Jacobian post-processing: OpenCL equivalent of mmc_cu_host.cu lines 890-1007.
      * After simulation, exportfield has normalized multi-slot real fluence and exportadjoint
      * has normalized imaginary fluence (RF only). Launch adjoint/dcoeff kernels on GPU to
@@ -1069,7 +1283,7 @@ is more than what your have specified (%d), please use the -H option to specify 
 
         if (cfg->issave2pt && cfg->parentid == mpStandalone && cfg->exportjacob) {
             MMC_FPRINTF(cfg->flog, "saving adjoint Jacobian to file ...\t");
-            mesh_savejacob(cfg, cfg->exportjacob, (int)Ns, (int)Nd, isrfforward, isdual);
+            mesh_savejacob(cfg, mesh, cfg->exportjacob, (int)Ns, (int)Nd, isrfforward, isdual);
             MMC_FPRINTF(cfg->flog, "saving Jacobian complete : %d ms\n\n", GetTimeMillis() - tic);
             mcx_fflush(cfg->flog);
         }

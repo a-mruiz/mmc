@@ -307,6 +307,10 @@ typedef struct MMC_config {
     int srcid;                    /**<multi-source selector: 0=merge all (default), -1=run each slot separately,
                                        -2=append detectors as adjoint sources without forcing adjoint output,
                                        N>0=run only the N-th source*/
+    char adjointmode;             /**<mesh-mode adjoint Jacobian formula: 0=full FEM (default, rb_femjacobian
+                                       formula with -0.1*Ve diag + 0.5*off-diag), 1=nodal approximation
+                                       (J_mua_n = -nvol*phi_s*phi_d, rbjacmuafast.m). Affects J_mua only;
+                                       J_D always uses the full FEM form.*/
     double* energytot;             /**<total energy launched for each source, a buffer of length srcnum */
     double* energyesc;             /**<total energy escaped for each source, a buffer of length srcnum */
     unsigned int detectedcount;    /**<total number of detected photons*/

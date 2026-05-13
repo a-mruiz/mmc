@@ -150,6 +150,8 @@ void parse_config(const py::dict& user_cfg, mcconfig& mcx_config, tetmesh& mesh)
     GET_SCALAR_FIELD(user_cfg, mcx_config, maxdetphoton, py::int_);
     GET_SCALAR_FIELD(user_cfg, mcx_config, maxjumpdebug, py::int_);
     GET_SCALAR_FIELD(user_cfg, mcx_config, e0, py::int_);
+    GET_SCALAR_FIELD(user_cfg, mcx_config, srcid, py::int_);
+    GET_SCALAR_FIELD(user_cfg, mcx_config, adjointmode, py::int_);
     GET_VEC3_FIELD(user_cfg, mcx_config, srcpos, float);
     GET_VEC34_FIELD(user_cfg, mcx_config, srcdir, float);
     GET_VEC3_FIELD(user_cfg, mcx_config, steps, float);
@@ -1055,19 +1057,29 @@ py::dict pmmc_interface(const py::dict& user_cfg) {
                 output["dref"] = dref_array;
             }
 
-            /* Output adjoint Jacobian in separate dict fields (output["jmua"], output["jd"], etc.) */
-            if (isadjoint && mcx_config.exportjacob && mcx_config.method == rtBLBadouelGrid) {
+            /* Output adjoint Jacobian in separate dict fields (output["jmua"], output["jd"], etc.).
+             * Grid mode: shape [Nx, Ny, Nz, maxgate, Ns*Nd].
+             * Mesh mode (basisorder=1): shape [nn, Ns*Nd] (CW, no maxgate dim). */
+            if (isadjoint && mcx_config.exportjacob) {
                 int Ns = (mcx_config.extrasrclen > mcx_config.detnum) ? (mcx_config.extrasrclen - mcx_config.detnum) : 1;
                 int Nd = (mcx_config.detnum > 0)                      ?  mcx_config.detnum                          : 1;
                 int nsrcpairs = Ns * Nd;
                 int isdual = MCX_IS_DUAL_ADJOINT_TYPE(mcx_config.outputtype);
-                size_t adjlen = (size_t)mcx_config.dim.x * mcx_config.dim.y * mcx_config.dim.z *
-                                mcx_config.maxgate * nsrcpairs;
+                size_t adjlen;
+                std::vector<size_t> jdims;
 
-                std::vector<size_t> jdims = {(size_t)mcx_config.dim.x, (size_t)mcx_config.dim.y,
-                                             (size_t)mcx_config.dim.z, (size_t)mcx_config.maxgate,
-                                             (size_t)nsrcpairs
-                                            };
+                if (mcx_config.method == rtBLBadouelGrid) {
+                    adjlen = (size_t)mcx_config.dim.x * mcx_config.dim.y * mcx_config.dim.z *
+                             mcx_config.maxgate * nsrcpairs;
+                    jdims = {(size_t)mcx_config.dim.x, (size_t)mcx_config.dim.y,
+                             (size_t)mcx_config.dim.z, (size_t)mcx_config.maxgate,
+                             (size_t)nsrcpairs
+                            };
+                } else {
+                    /* mesh mode: nodal output, CW only */
+                    adjlen = (size_t)mesh.nn * nsrcpairs;
+                    jdims = {(size_t)mesh.nn, (size_t)nsrcpairs};
+                }
 
                 const char* jname1 = "jmua";
                 const char* jname2 = "jd";

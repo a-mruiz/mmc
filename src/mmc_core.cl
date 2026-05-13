@@ -2170,3 +2170,251 @@ __kernel void mmc_adjoint_dcoeff_kernel(__global float* gfield_re, __global floa
         }
     }
 }
+
+/**
+ * @brief Mesh-mode adjoint Jacobian (full FEM form), one thread per element.
+ *
+ * Implements the rb_femjacobian formula on a tet mesh given nodal fluences
+ * phi_s, phi_d. Per element t with 4 nodes ee[0..3] and volume Ve:
+ *
+ *   J_mua(t) = -0.1*Ve * [ Σ_i φ_s(ee[i])·φ_d(ee[i])
+ *                          + 0.5 * Σ_{i<j} (φ_s(ee[i])·φ_d(ee[j]) + φ_s(ee[j])·φ_d(ee[i])) ]
+ *
+ *   J_D(t)   = -[ Σ_i deldotdel[t][diag_i] · φ_s(ee[i])·φ_d(ee[i])
+ *                + Σ_{i<j} deldotdel[t][off_ij] · (φ_s(ee[i])·φ_d(ee[j]) + φ_s(ee[j])·φ_d(ee[i])) ]
+ *
+ * Nodal-fluence layout (matches mmc_adjoint_kernel's grid convention):
+ *   field[node + (gate + slot*maxgate)*nn]
+ *
+ * Output:
+ *   if isnodal == 0: g_jmua_e/g_jd_e[t + (s*Nd+d)*ne]
+ *   if isnodal != 0: g_jmua_n/g_jd_n[n + (s*Nd+d)*nn] (atomic scatter, *0.25)
+ *
+ * RF: gfield_im non-NULL; real/imag Jacobian written to first/second adjointlen blocks.
+ *
+ * @param[in]  gfield_re   nodal real fluence [nn * maxgate * nsrcslots]
+ * @param[in]  gfield_im   nodal imag fluence (RF only) or NULL
+ * @param[in]  gelem       per-element node indices (1-based), shape [ne * elemlen]
+ * @param[in]  gevol       per-element volume (float, length ne)
+ * @param[in]  gdeldotdel  per-element ⟨∇φ_i·∇φ_j⟩*Ve, packed upper-triangle [ne*10]
+ * @param[out] gjmua       J_mua output (NULL to skip)
+ * @param[out] gjd         J_D   output (NULL to skip)
+ * @param[in]  ne, nn      mesh sizes
+ * @param[in]  maxgate     number of time gates
+ * @param[in]  Ns, Nd      number of source and detector slots
+ * @param[in]  elemlen     usually 4 for tets
+ * @param[in]  isnodal     0=element-based output; nonzero=nodal output (atomic scatter)
+ */
+#ifdef __NVCC__
+__global__ void mmc_adjoint_mesh_full_kernel(float* gfield_re, float* gfield_im,
+        int* gelem, float* gevol, float* gdeldotdel,
+        float* gjmua, float* gjd,
+        unsigned int ne, unsigned int nn, unsigned int maxgate,
+        unsigned int Ns, unsigned int Nd, unsigned int elemlen,
+        int isnodal) {
+    unsigned int t = blockIdx.x * blockDim.x + threadIdx.x;
+#else
+__kernel void mmc_adjoint_mesh_full_kernel(__global float* gfield_re, __global float* gfield_im,
+        __global int* gelem, __global float* gevol, __global float* gdeldotdel,
+        __global float* gjmua, __global float* gjd,
+        unsigned int ne, unsigned int nn, unsigned int maxgate,
+        unsigned int Ns, unsigned int Nd, unsigned int elemlen,
+        int isnodal) {
+    unsigned int t = get_global_id(0);
+#endif
+
+    if (t >= ne) {
+        return;
+    }
+
+    /* upper-triangle pair indices into the packed 10-entry deldotdel row:
+     * order is [00,01,02,03,11,12,13,22,23,33] */
+    const int diag_idx[4] = {0, 4, 7, 9};
+    const int off_idx[6]  = {1, 2, 3, 5, 6, 8};
+    const int pair_a[6]   = {0, 0, 0, 1, 1, 2};
+    const int pair_b[6]   = {1, 2, 3, 2, 3, 3};
+
+    int ee[4];
+
+    for (int k = 0; k < 4; k++) {
+        ee[k] = gelem[t * elemlen + k] - 1;  /* 1-based -> 0-based */
+    }
+
+    float Ve = gevol[t];
+
+    size_t adjointlen_e = (size_t)ne * Ns * Nd;
+    size_t adjointlen_n = (size_t)nn * Ns * Nd;
+    int isrf = (gfield_im != 0) ? 1 : 0;
+
+    for (unsigned int s = 0; s < Ns; s++) {
+        float phisr[4], phisi[4];
+
+        for (int k = 0; k < 4; k++) {
+            phisr[k] = mmc_cw_sum(gfield_re, ee[k], s, maxgate, nn);
+            phisi[k] = isrf ? mmc_cw_sum(gfield_im, ee[k], s, maxgate, nn) : 0.f;
+        }
+
+        for (unsigned int d = 0; d < Nd; d++) {
+            unsigned int slot = Ns + d;
+            float phidr[4], phidi[4];
+
+            for (int k = 0; k < 4; k++) {
+                phidr[k] = mmc_cw_sum(gfield_re, ee[k], slot, maxgate, nn);
+                phidi[k] = isrf ? mmc_cw_sum(gfield_im, ee[k], slot, maxgate, nn) : 0.f;
+            }
+
+            /* assemble Re/Im of (phi_s * phi_d) products at each node-pair (float arithmetic
+             * is fine here — MC noise dominates well above single-precision roundoff) */
+            float jmua_re = 0.f, jmua_im = 0.f;
+            float jd_re   = 0.f, jd_im   = 0.f;
+
+            /* diagonal terms: i == j */
+            for (int i = 0; i < 4; i++) {
+                float pre = phisr[i] * phidr[i] - phisi[i] * phidi[i];
+                float pim = isrf ? (phisr[i] * phidi[i] + phisi[i] * phidr[i]) : 0.f;
+                jmua_re += pre;
+                jmua_im += pim;
+
+                if (gjd) {
+                    float w = gdeldotdel[(size_t)t * 10 + diag_idx[i]];
+                    jd_re += w * pre;
+                    jd_im += w * pim;
+                }
+            }
+
+            /* off-diagonal pairs (i<j): use both orderings phi_s[i]*phi_d[j] + phi_s[j]*phi_d[i] */
+            for (int p = 0; p < 6; p++) {
+                int a = pair_a[p], b = pair_b[p];
+                float pre = phisr[a] * phidr[b] + phisr[b] * phidr[a]
+                            - phisi[a] * phidi[b] - phisi[b] * phidi[a];
+                float pim = isrf ? (phisr[a] * phidi[b] + phisr[b] * phidi[a]
+                                    + phisi[a] * phidr[b] + phisi[b] * phidr[a]) : 0.f;
+                jmua_re += 0.5f * pre;
+                jmua_im += 0.5f * pim;
+
+                if (gjd) {
+                    float w = gdeldotdel[(size_t)t * 10 + off_idx[p]];
+                    jd_re += w * pre;
+                    jd_im += w * pim;
+                }
+            }
+
+            jmua_re *= -0.1f * Ve;
+            jmua_im *= -0.1f * Ve;
+            jd_re   *= -1.f;
+            jd_im   *= -1.f;
+
+            unsigned int sdpair = s * Nd + d;
+
+            if (!isnodal) {
+                /* element-based output: one write per (sd, t) */
+                if (gjmua) {
+                    size_t k = (size_t)t + (size_t)sdpair * ne;
+                    gjmua[k] = jmua_re;
+
+                    if (isrf) {
+                        gjmua[k + adjointlen_e] = jmua_im;
+                    }
+                }
+
+                if (gjd) {
+                    size_t k = (size_t)t + (size_t)sdpair * ne;
+                    gjd[k] = jd_re;
+
+                    if (isrf) {
+                        gjd[k + adjointlen_e] = jd_im;
+                    }
+                }
+            } else {
+                /* nodal output: scatter 0.25 * elem-value to each of 4 nodes (atomic) */
+                float c = 0.25f;
+                float jmua_re_f = jmua_re * c;
+                float jmua_im_f = jmua_im * c;
+                float jd_re_f   = jd_re   * c;
+                float jd_im_f   = jd_im   * c;
+
+                for (int k = 0; k < 4; k++) {
+                    size_t base = (size_t)ee[k] + (size_t)sdpair * nn;
+
+                    if (gjmua) {
+                        atomicadd(gjmua + base, jmua_re_f);
+
+                        if (isrf) {
+                            atomicadd(gjmua + base + adjointlen_n, jmua_im_f);
+                        }
+                    }
+
+                    if (gjd) {
+                        atomicadd(gjd + base, jd_re_f);
+
+                        if (isrf) {
+                            atomicadd(gjd + base + adjointlen_n, jd_im_f);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * @brief Mesh-mode adjoint Jacobian (nodal approximation), one thread per node.
+ *
+ * Implements the nodal-adjoint approximation from PhD thesis eq.
+ * (3d3d:adjoint:nodal) / rbjacmuafast.m:
+ *
+ *   J_mua_n(n) = -nvol[n] * φ_s(n) * φ_d(n)
+ *
+ * Valid when the forward mesh is fine relative to the parameter mesh.
+ * J_D is NOT defined in this approximation; use the full FEM kernel for J_D.
+ *
+ * @param[in]  gfield_re   nodal real fluence [nn * maxgate * nsrcslots]
+ * @param[in]  gfield_im   nodal imag fluence (RF only) or NULL
+ * @param[in]  gnvol       per-node Voronoi volume (float, length nn)
+ * @param[out] gjmua       J_mua_n output, [nn * Ns * Nd] (CW) plus another such block for imag
+ * @param[in]  nn          number of nodes
+ * @param[in]  maxgate     number of time gates
+ * @param[in]  Ns, Nd      number of source and detector slots
+ */
+#ifdef __NVCC__
+__global__ void mmc_adjoint_mesh_nodal_kernel(float* gfield_re, float* gfield_im,
+        float* gnvol, float* gjmua,
+        unsigned int nn, unsigned int maxgate,
+        unsigned int Ns, unsigned int Nd) {
+    unsigned int n = blockIdx.x * blockDim.x + threadIdx.x;
+#else
+__kernel void mmc_adjoint_mesh_nodal_kernel(__global float* gfield_re, __global float* gfield_im,
+        __global float* gnvol, __global float* gjmua,
+        unsigned int nn, unsigned int maxgate,
+        unsigned int Ns, unsigned int Nd) {
+    unsigned int n = get_global_id(0);
+#endif
+
+    if (n >= nn) {
+        return;
+    }
+
+    size_t adjointlen = (size_t)nn * Ns * Nd;
+    float vol = gnvol[n];
+    int isrf = (gfield_im != 0) ? 1 : 0;
+
+    for (unsigned int s = 0; s < Ns; s++) {
+        float cw_src_re = mmc_cw_sum(gfield_re, n, s, maxgate, nn);
+        float cw_src_im = isrf ? mmc_cw_sum(gfield_im, n, s, maxgate, nn) : 0.f;
+
+        for (unsigned int d = 0; d < Nd; d++) {
+            unsigned int slot = Ns + d;
+            float cw_det_re = mmc_cw_sum(gfield_re, n, slot, maxgate, nn);
+
+            size_t out_idx = (size_t)n + (size_t)(s * Nd + d) * nn;
+
+            if (isrf) {
+                float cw_det_im = mmc_cw_sum(gfield_im, n, slot, maxgate, nn);
+                gjmua[out_idx]              = -vol * (cw_src_re * cw_det_re - cw_src_im * cw_det_im);
+                gjmua[out_idx + adjointlen] = -vol * (cw_src_re * cw_det_im + cw_src_im * cw_det_re);
+            } else {
+                gjmua[out_idx] = -vol * cw_src_re * cw_det_re;
+            }
+        }
+    }
+}

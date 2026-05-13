@@ -271,6 +271,7 @@ void mcx_initcfg(mcconfig* cfg) {
     cfg->extrasrclen = 0;
     cfg->srcdata = NULL;
     cfg->srcid = 0;
+    cfg->adjointmode = 0;
     cfg->detdir = NULL;
     cfg->exportadjoint = NULL;
     cfg->exportjacob = NULL;
@@ -3438,6 +3439,13 @@ void mmc_validate_config(mcconfig* cfg, float* detps, int dimdetps[2], int seedb
         MMC_ERROR(-4, "srcid exceeds total defined source count");
     }
 
+    /* Mesh-mode adjoint Jacobian needs nodal fluence (basisorder=1) so that
+     * phi(node) is well-defined and ∇φ is non-zero inside each tet. */
+    if (MCX_IS_ADJOINT_TYPE(cfg->outputtype) && cfg->method != rtBLBadouelGrid && cfg->basisorder != 1) {
+        MMC_ERROR(-4, "mesh-mode adjoint Jacobian requires basisorder=1 (nodal fluence); "
+                  "use cfg.method='grid' or set cfg.basisorder=1");
+    }
+
     cfg->his.unitinmm = cfg->unitinmm;
 
     if (cfg->steps.x != cfg->steps.y || cfg->steps.y != cfg->steps.z) {
@@ -4015,8 +4023,9 @@ void mcx_parsecmd(int argc, char* argv[], mcconfig* cfg) {
         MMC_ERROR(-1, "Adjoint Jacobian output is not valid in replay mode.");
     }
 
-    if (MCX_IS_ADJOINT_TYPE(cfg->outputtype) && cfg->method != rtBLBadouelGrid) {
-        MMC_ERROR(-1, "Adjoint Jacobian output currently requires grid output (method G). Please use -M G.");
+    if (MCX_IS_ADJOINT_TYPE(cfg->outputtype) && cfg->method != rtBLBadouelGrid && cfg->basisorder != 1) {
+        MMC_ERROR(-1, "Mesh-mode adjoint Jacobian requires basisorder=1 (nodal fluence); "
+                  "use -M G for grid output or set --basisorder 1.");
     }
 
     if (cfg->isgpuinfo != 2) { /*print gpu info only*/
