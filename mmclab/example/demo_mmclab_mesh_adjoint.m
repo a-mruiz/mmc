@@ -92,8 +92,12 @@ for k = 1:npair
     colorbar;
     title(sprintf('|J_D|  S-D_%d', k));
 end
-sgtitle(['Mesh-mode adjoint (full FEM): J_{\mu_a} (top) and J_D (bottom)' ...
-         '  for 3 S-D pairs']);
+try
+    sgtitle(['Mesh-mode adjoint (full FEM): J_{\mu_a} (top) and J_D (bottom)' ...
+             '  for 3 S-D pairs']);
+catch
+    % sgtitle was added in Octave 8.0; older Octave silently skips it.
+end
 
 % ---- Sanity check: J_mua should be (essentially) phi_S * phi_D ------
 % flux.data is [nn, 1, Ns+Nd] with slots 0..Ns-1 forward sources and

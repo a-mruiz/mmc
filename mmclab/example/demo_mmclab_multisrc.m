@@ -81,7 +81,8 @@ plotmesh([cfg.node, log10(phi_srcid1 + 1e-12)], cfg.elem, 'y=30', ...
 view([0 1 0]);
 colorbar;
 title('Single run: srcid=1 only');
-sgtitle('Multi-source forward via cfg.srcpos = [...; ...]');
+% sgtitle was added in Octave 8.0; wrap so older Octave silently skips it.
+try; sgtitle('Multi-source forward via cfg.srcpos = [...; ...]'); catch; end
 
 % Relative agreement between slot-1 of the multi-run and the dedicated
 % single-source run (should be within Monte Carlo noise, a few percent).
