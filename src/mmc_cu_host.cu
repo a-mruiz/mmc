@@ -285,7 +285,7 @@ void mmc_run_simulation(mcconfig* cfg, tetmesh* mesh, raytracer* tracer, GPUInfo
         mesh->srcelemlen,
         cfg->e0,
         cfg->isextdet,
-        (uint)(meshlen / cfg->srcnum),
+        (uint)(meshlen / (cfg->srcnum * nsrcslots)),  /* framelen = datalen (per-gate stride); slot stride is datalen*maxgate */
         (uint)(mesh->prop + 1 + cfg->isextdet) + (uint)(cfg->extrasrclen * 4) + cfg->detnum,
         (uint)(MIN((MAX_PROP - (mesh->prop + 1 + cfg->isextdet) - (cfg->extrasrclen * 4) - cfg->detnum), ((mesh->ne) << 2)) >> 2), /*max count of elem normal data in const mem*/
         cfg->issaveseed,
@@ -854,7 +854,7 @@ are more than what your have specified (%d), please use the --maxjumpdebug optio
             } else {
                 /* basisorder=1 mesh mode: redistribute per-element fluence onto nodes.
                  * Kernel layout per slot (adjoint, srcnum=1, nsrcslots>1):
-                 *   field[eid + gate*ne*nsrcslots + slot*ne*maxgate]
+                 *   field[eid + gate*ne + slot*ne*maxgate]
                  * Pattern source layout (srcnum>1, nsrcslots=1):
                  *   field[(gate*ne + eid)*srcnum + pidx]
                  * Output layout (matches grid's slot_stride = datalen * maxgate convention):
@@ -865,19 +865,19 @@ are more than what your have specified (%d), please use the --maxjumpdebug optio
 
                 if (nslots > 1u && cfg->srcnum == 1) {
                     for (uint slot = 0; slot < nslots; slot++) {
-                        size_t f_slot_off = (size_t)slot * (size_t)mesh->ne * (size_t)cfg->maxgate;
-                        size_t e_slot_off = (size_t)slot * (size_t)mesh->nn * (size_t)cfg->maxgate;
+                        size_t slot_off_f = (size_t)slot * (size_t)mesh->ne * (size_t)cfg->maxgate;
+                        size_t slot_off_e = (size_t)slot * (size_t)mesh->nn * (size_t)cfg->maxgate;
 
                         for (i = 0; i < cfg->maxgate; i++) {
-                            size_t f_gate_off = (size_t)i * (size_t)mesh->ne * (size_t)nslots;
+                            size_t f_gate_off = (size_t)i * (size_t)mesh->ne;
                             size_t e_gate_off = (size_t)i * (size_t)mesh->nn;
 
                             for (j = 0; j < mesh->ne; j++) {
-                                float ww = field[f_slot_off + f_gate_off + j] * 0.25f;
+                                float ww = field[slot_off_f + f_gate_off + j] * 0.25f;
                                 int k;
 
                                 for (k = 0; k < mesh->elemlen; k++) {
-                                    cfg->exportfield[e_slot_off + e_gate_off
+                                    cfg->exportfield[slot_off_e + e_gate_off
                                                                 + mesh->elem[j * mesh->elemlen + k] - 1] += ww;
                                 }
                             }
