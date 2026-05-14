@@ -891,30 +891,50 @@ py::dict pmmc_interface(const py::dict& user_cfg) {
 
         /** Build srcdata from detectors for adjoint / srcid=-2 mode.
          *  Convention (matches mmclab.cpp and mmc_validate_config):
-         *    slots 0..Ns-1        : forward sources (copy of cfg.srcpos/srcdir, srcnum>=1)
+         *    slots 0..Ns-1        : forward sources
          *    slots Ns..Ns+Nd-1    : detector-as-adjoint sources
+         *  If the multi-source srcpos parser already populated cfg.srcdata
+         *  with M forward slots (cfg.extrasrclen == M), keep them and only
+         *  append Nd detectors. Otherwise replicate cfg.srcpos cfg.srcnum
+         *  times (single-source / photon-sharing convention).
          */
         if ((MCX_IS_ADJOINT_TYPE(mcx_config.outputtype) || mcx_config.srcid == -2)
                 && mcx_config.detnum > 0 && mcx_config.detdir != nullptr) {
-            if (mcx_config.srcdata) {
-                free(mcx_config.srcdata);
-            }
-
-            int Ns = (mcx_config.srcnum > 0) ? mcx_config.srcnum : 1;
             int Nd = mcx_config.detnum;
-            mcx_config.extrasrclen = Ns + Nd;
-            mcx_config.srcdata = (ExtraSrc*)calloc(mcx_config.extrasrclen, sizeof(ExtraSrc));
+            int Ns;
+            int already_populated = (mcx_config.srcdata != nullptr && mcx_config.extrasrclen > 0);
 
-            for (int is = 0; is < Ns; is++) {
-                mcx_config.srcdata[is].srcpos    = {mcx_config.srcpos.x, mcx_config.srcpos.y,
-                                                    mcx_config.srcpos.z, 1.f / Ns
-                                                   };
-                mcx_config.srcdata[is].srcdir    = {mcx_config.srcdir.x, mcx_config.srcdir.y,
-                                                    mcx_config.srcdir.z, 0.f
-                                                   };
-                mcx_config.srcdata[is].srcparam1 = mcx_config.srcparam1;
-                mcx_config.srcdata[is].srcparam2 = mcx_config.srcparam2;
+            if (already_populated) {
+                Ns = mcx_config.extrasrclen;
+                mcx_config.srcdata = (ExtraSrc*)realloc(mcx_config.srcdata, (Ns + Nd) * sizeof(ExtraSrc));
+                memset(mcx_config.srcdata + Ns, 0, Nd * sizeof(ExtraSrc));
+
+                for (int is = 0; is < Ns; is++) {
+                    if (mcx_config.srcdata[is].srcpos.w == 0.f) {
+                        mcx_config.srcdata[is].srcpos.w = 1.f / Ns;
+                    }
+                }
+            } else {
+                if (mcx_config.srcdata) {
+                    free(mcx_config.srcdata);
+                }
+
+                Ns = (mcx_config.srcnum > 0) ? mcx_config.srcnum : 1;
+                mcx_config.srcdata = (ExtraSrc*)calloc(Ns + Nd, sizeof(ExtraSrc));
+
+                for (int is = 0; is < Ns; is++) {
+                    mcx_config.srcdata[is].srcpos    = {mcx_config.srcpos.x, mcx_config.srcpos.y,
+                                                        mcx_config.srcpos.z, 1.f / Ns
+                                                       };
+                    mcx_config.srcdata[is].srcdir    = {mcx_config.srcdir.x, mcx_config.srcdir.y,
+                                                        mcx_config.srcdir.z, 0.f
+                                                       };
+                    mcx_config.srcdata[is].srcparam1 = mcx_config.srcparam1;
+                    mcx_config.srcdata[is].srcparam2 = mcx_config.srcparam2;
+                }
             }
+
+            mcx_config.extrasrclen = Ns + Nd;
 
             for (int id = 0; id < Nd; id++) {
                 mcx_config.srcdata[Ns + id].srcpos  = {mcx_config.detpos[id].x, mcx_config.detpos[id].y,
