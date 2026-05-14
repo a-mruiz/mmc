@@ -285,7 +285,7 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
     }
 
     if (cfg->debuglevel & dlTraj && cfg->exportdebugdata == NULL) {
-        cfg->exportdebugdata = (float*)calloc(sizeof(float), (debuglen * cfg->maxjumpdebug));
+        cfg->exportdebugdata = (float*)calloc(sizeof(float), ((size_t)debuglen * cfg->maxjumpdebug));
     }
 
     cl_mem (*clCreateBufferNV)(cl_context, cl_mem_flags, cl_mem_flags_NV, size_t, void*, cl_int*) = (cl_mem (*)(cl_context, cl_mem_flags, cl_mem_flags_NV, size_t, void*, cl_int*)) clGetExtensionFunctionAddressForPlatform(platform, "clCreateBufferNV");
@@ -369,7 +369,7 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
         }
 
         if (cfg->debuglevel & dlTraj) {
-            OCL_ASSERT(((gdebugdata[i] = clCreateBuffer(mcxcontext, RW_MEM, sizeof(float) * (debuglen * cfg->maxjumpdebug), cfg->exportdebugdata, &status), status)));
+            OCL_ASSERT(((gdebugdata[i] = clCreateBuffer(mcxcontext, RW_MEM, sizeof(float) * ((size_t)debuglen * cfg->maxjumpdebug), cfg->exportdebugdata, &status), status)));
         }
 
         OCL_ASSERT(((genergy[i] = clCreateBuffer(mcxcontext, RW_MEM, sizeof(float) * (gpu[i].autothread << 1) * cfg->srcnum, energy, &status), status)));
@@ -639,7 +639,7 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
     }
 
     if (cfg->debuglevel & dlTraj && cfg->exportdebugdata == NULL) {
-        cfg->exportdebugdata = (float*)calloc(sizeof(float), (debuglen * cfg->maxjumpdebug));
+        cfg->exportdebugdata = (float*)calloc(sizeof(float), ((size_t)debuglen * cfg->maxjumpdebug));
     }
 
     cfg->energytot = (double*)calloc(cfg->srcnum, sizeof(double));
@@ -752,7 +752,7 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
                         }
 
                         debugrec = MIN(debugrec, cfg->maxjumpdebug);
-                        cfg->exportdebugdata = (float*)realloc(cfg->exportdebugdata, (cfg->debugdatalen + debugrec) * debuglen * sizeof(float));
+                        cfg->exportdebugdata = (float*)realloc(cfg->exportdebugdata, (size_t)((cfg->debugdatalen + debugrec) * debuglen * sizeof(float));
                         OCL_ASSERT((clEnqueueReadBuffer(mcxqueue[devid], gdebugdata[devid], CL_FALSE, 0, sizeof(float)*debuglen * debugrec,
                                                         cfg->exportdebugdata + cfg->debugdatalen, 0, NULL, waittoread + devid)));
                         cfg->debugdatalen += debugrec;
