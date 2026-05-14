@@ -588,7 +588,7 @@ void mmc_run_simulation(mcconfig* cfg, tetmesh* mesh, raytracer* tracer, GPUInfo
     }
 
     if (cfg->debuglevel & dlTraj) {
-        CUDA_ASSERT(cudaMalloc((void**) &gdebugdata, sizeof(float) * (debuglen * cfg->maxjumpdebug)));
+        CUDA_ASSERT(cudaMalloc((void**) &gdebugdata, sizeof(float) * ((size_t)debuglen * cfg->maxjumpdebug)));
     }
 
     if (cfg->seed == SEED_FROM_FILE) {
@@ -768,7 +768,7 @@ are more than what your have specified (%d), please use the --maxjumpdebug optio
                         }
 
                         debugrec = min(debugrec, cfg->maxjumpdebug);
-                        cfg->exportdebugdata = (float*)realloc(cfg->exportdebugdata, (cfg->debugdatalen + debugrec) * debuglen * sizeof(float));
+                        cfg->exportdebugdata = (float*)realloc(cfg->exportdebugdata, (size_t)(cfg->debugdatalen + debugrec) * debuglen * sizeof(float));
                         CUDA_ASSERT(cudaMemcpy(cfg->exportdebugdata + cfg->debugdatalen, gdebugdata, sizeof(float)*debuglen * debugrec, cudaMemcpyDeviceToHost));
                         cfg->debugdatalen += debugrec;
                     }
