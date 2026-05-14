@@ -351,7 +351,7 @@ void mmc_run_simulation(mcconfig* cfg, tetmesh* mesh, raytracer* tracer, GPUInfo
         }
 
         if (cfg->exportdetected == NULL) {
-            cfg->exportdetected = (float*)malloc(hostdetreclen * cfg->maxdetphoton * sizeof(float));
+            cfg->exportdetected = (float*)malloc((size_t)hostdetreclen * cfg->maxdetphoton * sizeof(float));
         }
 
         if (cfg->issaveseed && cfg->exportseed == NULL) {
@@ -803,10 +803,10 @@ are more than what your have specified (%d), please use the --maxjumpdebug optio
                     #pragma omp critical
                     {
                         cfg->exportdetected = (float*)realloc(
-                            cfg->exportdetected, (cfg->detectedcount + detected) *
+                            cfg->exportdetected, ((size_t)cfg->detectedcount + detected) *
                             hostdetreclen * sizeof(float));
-                        memcpy(cfg->exportdetected + cfg->detectedcount * (hostdetreclen),
-                               Pdet, detected * (hostdetreclen) * sizeof(float));
+                        memcpy(cfg->exportdetected + (size_t)cfg->detectedcount * (hostdetreclen),
+                               Pdet, (size_t)detected * (hostdetreclen) * sizeof(float));
 
                         if (cfg->issaveseed) {
                             cfg->exportseed = (unsigned char*)realloc(cfg->exportseed, (cfg->detectedcount + detected) * (sizeof(RandType) * RAND_BUF_LEN));

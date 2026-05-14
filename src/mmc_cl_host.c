@@ -631,7 +631,7 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
     }
 
     if (cfg->exportdetected == NULL) {
-        cfg->exportdetected = (float*)malloc(hostdetreclen * cfg->maxdetphoton * sizeof(float));
+        cfg->exportdetected = (float*)malloc((size_t)hostdetreclen * cfg->maxdetphoton * sizeof(float));
     }
 
     if (cfg->issaveseed && cfg->exportseed == NULL) {
@@ -752,7 +752,7 @@ void mmc_run_cl(mcconfig* cfg, tetmesh* mesh, raytracer* tracer) {
                         }
 
                         debugrec = MIN(debugrec, cfg->maxjumpdebug);
-                        cfg->exportdebugdata = (float*)realloc(cfg->exportdebugdata, (size_t)((cfg->debugdatalen + debugrec) * debuglen * sizeof(float));
+                        cfg->exportdebugdata = (float*)realloc(cfg->exportdebugdata, ((size_t)(cfg->debugdatalen + debugrec) * debuglen * sizeof(float)));
                         OCL_ASSERT((clEnqueueReadBuffer(mcxqueue[devid], gdebugdata[devid], CL_FALSE, 0, sizeof(float)*debuglen * debugrec,
                                                         cfg->exportdebugdata + cfg->debugdatalen, 0, NULL, waittoread + devid)));
                         cfg->debugdatalen += debugrec;
@@ -782,8 +782,8 @@ is more than what your have specified (%d), please use the -H option to specify 
                     detected = MIN(detected, cfg->maxdetphoton);
 
                     if (cfg->exportdetected) {
-                        cfg->exportdetected = (float*)realloc(cfg->exportdetected, (cfg->detectedcount + detected) * hostdetreclen * sizeof(float));
-                        memcpy(cfg->exportdetected + cfg->detectedcount * (hostdetreclen), Pdet, detected * (hostdetreclen)*sizeof(float));
+                        cfg->exportdetected = (float*)realloc(cfg->exportdetected, ((size_t)(cfg->detectedcount + detected) * hostdetreclen * sizeof(float)));
+                        memcpy(cfg->exportdetected + (size_t)cfg->detectedcount * hostdetreclen, Pdet, (size_t)detected * hostdetreclen * sizeof(float));
 
                         if (cfg->issaveseed) {
                             cfg->exportseed = (unsigned char*)realloc(cfg->exportseed, (cfg->detectedcount + detected) * (sizeof(RandType) * RAND_BUF_LEN));
